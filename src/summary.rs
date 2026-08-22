@@ -5,9 +5,9 @@
 //! model-written narrative sits *on top* of this, never inside it.
 
 use crate::discover::SessionPaths;
-use crate::transcript::{Content, INJECTED_PREFIXES, Transcript};
+use crate::transcript::{Block, Content, INJECTED_PREFIXES, Transcript};
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -18,7 +18,22 @@ use std::collections::{BTreeMap, BTreeSet};
 /// is the honest form.
 pub const IDLE_GAP_SECS: i64 = 120;
 
-#[derive(Debug, Default, Serialize, PartialEq, Eq)]
+/// Bucket widths the activity series will choose between, smallest first.
+///
+/// The width is a property of the session, not of the renderer: a ten-minute
+/// session and a ten-hour one both have to fit the same strip, and the choice
+/// belongs in the facts so two renderings of one session can never disagree.
+const BUCKET_LADDER: &[i64] = &[5, 10, 15, 30, 60, 120, 300, 600, 1800];
+
+/// Ceiling on buckets across the whole session; the ladder is walked until the
+/// series fits under it.
+const MAX_BUCKETS: usize = 240;
+
+/// How much of a user turn is carried as its label.
+const PREVIEW_CHARS: usize = 80;
+
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct TokenTotals {
     pub input: u64,
     pub output: u64,
@@ -28,7 +43,8 @@ pub struct TokenTotals {
 }
 
 /// What a file-modifying tool did, as recovered from its result payload.
-#[derive(Debug, Default, Serialize, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct FileChanges {
     pub files_touched: usize,
     pub lines_added: usize,
@@ -43,7 +59,102 @@ pub struct FileChanges {
     pub opaque_edits: usize,
 }
 
-#[derive(Debug, Default, Serialize)]
+/// One column of the activity strip: what happened in a fixed slice of time.
+///
+/// Counts only. What the work *was* is a later question — segmentation and
+/// labelling are the next sprint, and neither belongs in a bucket.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct Bucket {
+    pub records: u32,
+    pub tool_calls: u32,
+    pub tool_failures: u32,
+    pub user_turns: u32,
+    pub output_tokens: u64,
+}
+
+impl Bucket {
+    pub fn is_empty(&self) -> bool {
+        self.records == 0
+    }
+}
+
+/// A stretch of continuous work, bounded by idle gaps on either side.
+///
+/// Splitting at [`IDLE_GAP_SECS`] is what lets the strip collapse idle: a
+/// six-day resumed session becomes a handful of spans with labelled breaks
+/// between them, rather than 52 minutes of work lost in a week of whitespace.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ActivitySpan {
+    pub started: DateTime<Utc>,
+    pub ended: DateTime<Utc>,
+    pub secs: i64,
+    /// Idle seconds between the end of the previous span and this one; `0` for
+    /// the first span, which has nothing before it.
+    pub idle_before_secs: i64,
+    pub buckets: Vec<Bucket>,
+}
+
+/// The session as a uniformly-scaled time series with idle removed.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Activity {
+    /// Seconds per bucket, chosen from [`BUCKET_LADDER`] for this session.
+    pub bucket_secs: i64,
+    pub spans: Vec<ActivitySpan>,
+}
+
+impl Activity {
+    /// The busiest bucket's record count, for normalising a bar height.
+    pub fn peak_records(&self) -> u32 {
+        self.spans
+            .iter()
+            .flat_map(|s| &s.buckets)
+            .map(|b| b.records)
+            .max()
+            .unwrap_or(0)
+    }
+}
+
+/// A moment where the user was in the loop rather than watching.
+///
+/// These are the decision points of a session, and they are the one thing a
+/// tool-call histogram cannot show. Prompts carry a label rather than their
+/// full text; questions carry what was actually asked and chosen, because a
+/// count of "3 questions" says nothing about what was decided.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Involvement {
+    /// The user said something — typed text, a pasted image, or both.
+    Prompt {
+        at: Option<DateTime<Utc>>,
+        /// The first [`PREVIEW_CHARS`] characters, whitespace collapsed.
+        preview: String,
+        truncated: bool,
+        /// Images or documents pasted with this turn.
+        attachments: usize,
+    },
+    /// The agent stopped and asked. `chosen` is absent when the transcript
+    /// holds no answer — an interrupted question, not a silent one.
+    Question {
+        at: Option<DateTime<Utc>>,
+        header: Option<String>,
+        question: String,
+        options: Vec<String>,
+        chosen: Option<String>,
+    },
+}
+
+impl Involvement {
+    pub fn at(&self) -> Option<DateTime<Utc>> {
+        match self {
+            Involvement::Prompt { at, .. } | Involvement::Question { at, .. } => *at,
+        }
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Summary {
     pub session_id: Option<String>,
     pub project: Option<String>,
@@ -72,6 +183,12 @@ pub struct Summary {
     pub tool_failures: BTreeMap<String, u32>,
     pub tokens: TokenTotals,
     pub changes: FileChanges,
+
+    /// Work over time, idle removed. Additive to the facts contract: the
+    /// totals above stay exactly what they were.
+    pub activity: Activity,
+    /// Every moment the user was involved, in transcript order.
+    pub user_involvement: Vec<Involvement>,
 }
 
 impl Summary {
@@ -102,9 +219,19 @@ pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summa
     // tool_use id -> tool name, so an is_error result can be blamed correctly.
     let mut tool_names: BTreeMap<String, String> = BTreeMap::new();
     let mut stamps: Vec<DateTime<Utc>> = Vec::new();
+    let mut events: Vec<Event> = Vec::new();
     let mut changed_files: BTreeSet<String> = BTreeSet::new();
+    // AskUserQuestion tool_use id -> the involvement entries it produced, so
+    // the answers on its result can be filled in when they arrive.
+    let mut open_questions: BTreeMap<String, Vec<usize>> = BTreeMap::new();
 
     for rec in records {
+        let at = rec.timestamp.as_deref().and_then(parse_stamp);
+        let mut event = Event {
+            at,
+            ..Event::default()
+        };
+
         if s.session_id.is_none() {
             s.session_id.clone_from(&rec.session_id);
         }
@@ -117,7 +244,7 @@ pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summa
         if s.git_branch.is_none() {
             s.git_branch.clone_from(&rec.git_branch);
         }
-        if let Some(ts) = rec.timestamp.as_deref().and_then(parse_stamp) {
+        if let Some(ts) = at {
             stamps.push(ts);
         }
 
@@ -134,6 +261,7 @@ pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summa
                 s.tokens.thinking += u.output_tokens_details.thinking_tokens;
                 s.tokens.cache_read += u.cache_read_input_tokens;
                 s.tokens.cache_write += u.cache_creation_input_tokens;
+                event.output_tokens += u.output_tokens;
             }
             for block in msg.content.blocks() {
                 if block.kind != "tool_use" {
@@ -143,11 +271,20 @@ pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summa
                     continue;
                 };
                 *s.tool_calls.entry(name.clone()).or_default() += 1;
+                event.tool_calls += 1;
                 if let Some(id) = &block.id {
                     tool_names.insert(id.clone(), name.clone());
                 }
                 match name.as_str() {
-                    "AskUserQuestion" => s.ask_user_questions += 1,
+                    "AskUserQuestion" => {
+                        s.ask_user_questions += 1;
+                        let asked = push_questions(&mut s.user_involvement, block, at);
+                        if let Some(id) = &block.id
+                            && !asked.is_empty()
+                        {
+                            open_questions.insert(id.clone(), asked);
+                        }
+                    }
                     "Skill" => push_input_str(&mut s.skills, block.input.as_ref(), "skill"),
                     "Agent" | "Task" => {
                         push_input_str(&mut s.subagents, block.input.as_ref(), "subagent_type");
@@ -160,17 +297,29 @@ pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summa
         if rec.kind == "user"
             && let Some(msg) = &rec.message
         {
-            if is_user_turn(&msg.content) {
-                s.user_prompts += 1;
-            }
-            s.pasted_attachments += msg
+            let attachments = msg
                 .content
                 .blocks()
                 .iter()
                 .filter(|b| matches!(b.kind.as_str(), "image" | "document"))
                 .count();
+            s.pasted_attachments += attachments;
+            if is_user_turn(&msg.content) {
+                s.user_prompts += 1;
+                event.user_turns += 1;
+                let (preview, truncated) = preview_of(&msg.content);
+                s.user_involvement.push(Involvement::Prompt {
+                    at,
+                    preview,
+                    truncated,
+                    attachments,
+                });
+            }
             for block in msg.content.blocks() {
-                if block.kind == "tool_result" && block.is_error.unwrap_or(false) {
+                if block.kind != "tool_result" {
+                    continue;
+                }
+                if block.is_error.unwrap_or(false) {
                     let name = block
                         .tool_use_id
                         .as_ref()
@@ -178,12 +327,26 @@ pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summa
                         .cloned()
                         .unwrap_or_else(|| "<unknown>".to_string());
                     *s.tool_failures.entry(name).or_default() += 1;
+                    event.tool_failures += 1;
+                }
+                if let Some(id) = &block.tool_use_id
+                    && let Some(indices) = open_questions.remove(id)
+                {
+                    fill_answers(
+                        &mut s.user_involvement,
+                        &indices,
+                        rec.tool_use_result.as_ref(),
+                    );
                 }
             }
         }
 
         if let Some(result) = &rec.tool_use_result {
             tally_changes(result, &mut s.changes, &mut changed_files);
+        }
+
+        if event.at.is_some() {
+            events.push(event);
         }
     }
 
@@ -214,7 +377,90 @@ pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summa
         s.active_secs = s.wall_secs - s.idle_secs;
     }
 
+    // Records are appended in order, but a transcript that merged two writers
+    // need not be sorted; the series is built from time, not from file order.
+    events.sort_by_key(|e| e.at);
+    s.activity = build_activity(&events);
+
     s
+}
+
+/// One record's contribution to the activity series.
+#[derive(Debug, Default, Clone, Copy)]
+struct Event {
+    at: Option<DateTime<Utc>>,
+    tool_calls: u32,
+    tool_failures: u32,
+    user_turns: u32,
+    output_tokens: u64,
+}
+
+/// Cut the event stream at idle gaps and bucket each resulting span.
+fn build_activity(events: &[Event]) -> Activity {
+    let times: Vec<DateTime<Utc>> = events.iter().filter_map(|e| e.at).collect();
+    if times.is_empty() {
+        return Activity::default();
+    }
+
+    // Inclusive index ranges of continuous work.
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0;
+    for i in 1..times.len() {
+        if (times[i] - times[i - 1]).num_seconds() >= IDLE_GAP_SECS {
+            ranges.push((start, i - 1));
+            start = i;
+        }
+    }
+    ranges.push((start, times.len() - 1));
+
+    let bucket_secs = choose_bucket_secs(&times, &ranges);
+    let mut spans = Vec::with_capacity(ranges.len());
+    let mut prev_end: Option<DateTime<Utc>> = None;
+
+    for (a, b) in ranges {
+        let (started, ended) = (times[a], times[b]);
+        let secs = (ended - started).num_seconds();
+        let count = bucket_count(secs, bucket_secs);
+        let mut buckets = vec![Bucket::default(); count];
+        for (event, at) in events[a..=b].iter().zip(&times[a..=b]) {
+            let idx = (((*at - started).num_seconds() / bucket_secs) as usize).min(count - 1);
+            let bucket = &mut buckets[idx];
+            bucket.records += 1;
+            bucket.tool_calls += event.tool_calls;
+            bucket.tool_failures += event.tool_failures;
+            bucket.user_turns += event.user_turns;
+            bucket.output_tokens += event.output_tokens;
+        }
+        spans.push(ActivitySpan {
+            started,
+            ended,
+            secs,
+            idle_before_secs: prev_end.map_or(0, |p| (started - p).num_seconds()),
+            buckets,
+        });
+        prev_end = Some(ended);
+    }
+
+    Activity { bucket_secs, spans }
+}
+
+fn bucket_count(span_secs: i64, bucket_secs: i64) -> usize {
+    (span_secs / bucket_secs) as usize + 1
+}
+
+/// The narrowest ladder rung that keeps the whole series under [`MAX_BUCKETS`].
+fn choose_bucket_secs(times: &[DateTime<Utc>], ranges: &[(usize, usize)]) -> i64 {
+    let fallback = BUCKET_LADDER[BUCKET_LADDER.len() - 1];
+    for &width in BUCKET_LADDER {
+        let total: usize = ranges
+            .iter()
+            .map(|&(a, b)| bucket_count((times[b] - times[a]).num_seconds(), width))
+            .sum();
+        if total <= MAX_BUCKETS {
+            return width;
+        }
+    }
+    fallback
 }
 
 /// Whether a `user` record is the user actually saying something.
@@ -244,6 +490,113 @@ fn is_user_turn(content: &Content) -> bool {
             })
         }
         Content::Empty => false,
+    }
+}
+
+/// A one-line label for a user turn: the leading [`PREVIEW_CHARS`] characters
+/// of what the user actually typed, with injected context left out.
+///
+/// Returns the label and whether it was cut short.
+fn preview_of(content: &Content) -> (String, bool) {
+    let raw = match content {
+        Content::Text(text) => text.clone(),
+        Content::Blocks(blocks) => blocks
+            .iter()
+            .filter(|b| b.kind == "text" && !b.is_injected_context())
+            .filter_map(|b| b.text.as_deref())
+            .collect::<Vec<_>>()
+            .join(" "),
+        Content::Empty => String::new(),
+    };
+    let flat = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let truncated = flat.chars().count() > PREVIEW_CHARS;
+    let preview = if truncated {
+        flat.chars().take(PREVIEW_CHARS).collect()
+    } else {
+        flat
+    };
+    (preview, truncated)
+}
+
+/// Turn one `AskUserQuestion` call into involvement entries, one per question.
+///
+/// Returns their indices so the answers can be joined on when the result
+/// record arrives.
+fn push_questions(
+    into: &mut Vec<Involvement>,
+    block: &Block,
+    at: Option<DateTime<Utc>>,
+) -> Vec<usize> {
+    let Some(questions) = block
+        .input
+        .as_ref()
+        .and_then(|i| i.get("questions"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    let mut indices = Vec::new();
+    for q in questions {
+        let Some(question) = q.get("question").and_then(Value::as_str) else {
+            continue;
+        };
+        indices.push(into.len());
+        into.push(Involvement::Question {
+            at,
+            header: q.get("header").and_then(Value::as_str).map(str::to_string),
+            question: question.to_string(),
+            options: option_labels(q),
+            chosen: None,
+        });
+    }
+    indices
+}
+
+fn option_labels(question: &Value) -> Vec<String> {
+    question
+        .get("options")
+        .and_then(Value::as_array)
+        .map(|opts| {
+            opts.iter()
+                .filter_map(|o| o.get("label").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Join an `AskUserQuestion` result's `answers` map onto the questions it
+/// answered. The map is keyed by the question text itself.
+///
+/// A question with no matching answer keeps `chosen: None` — an interrupted
+/// prompt is a real thing, and inventing a selection would be worse than
+/// showing none.
+fn fill_answers(into: &mut [Involvement], indices: &[usize], result: Option<&Value>) {
+    let Some(answers) = result
+        .and_then(|r| r.get("answers"))
+        .and_then(Value::as_object)
+    else {
+        return;
+    };
+    for &i in indices {
+        if let Some(Involvement::Question {
+            question, chosen, ..
+        }) = into.get_mut(i)
+            && let Some(answer) = answers.get(question.as_str())
+        {
+            *chosen = match answer {
+                Value::String(s) => Some(s.clone()),
+                Value::Array(items) => Some(
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ),
+                _ => None,
+            };
+        }
     }
 }
 
@@ -408,6 +761,126 @@ mod tests {
         let s = summarize(None, &t);
         assert_eq!(s.changes.files_touched, 0);
         assert_eq!(s.changes.opaque_edits, 1);
+    }
+
+    #[test]
+    fn the_activity_series_splits_at_idle_gaps() {
+        let t = transcript(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z"}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:30.000Z"}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T12:00:30.000Z"}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T12:00:40.000Z"}"#,
+        ]);
+        let a = summarize(None, &t).activity;
+        assert_eq!(a.spans.len(), 2);
+        assert_eq!(a.spans[0].secs, 30);
+        assert_eq!(a.spans[0].idle_before_secs, 0);
+        assert_eq!(a.spans[1].secs, 10);
+        assert_eq!(a.spans[1].idle_before_secs, 7200);
+        // Every record lands in exactly one bucket, and idle occupies none.
+        let counted: u32 = a
+            .spans
+            .iter()
+            .flat_map(|s| &s.buckets)
+            .map(|b| b.records)
+            .sum();
+        assert_eq!(counted, 4);
+    }
+
+    /// The bucket width is a fact about the session, so a long session stays
+    /// renderable instead of producing thousands of columns.
+    #[test]
+    fn bucket_width_widens_so_the_series_stays_bounded() {
+        let short = transcript(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z"}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:01:00.000Z"}"#,
+        ]);
+        assert_eq!(summarize(None, &short).activity.bucket_secs, 5);
+
+        // Six hours of unbroken work cannot fit in five-second buckets.
+        let lines: Vec<String> = (0..360)
+            .map(|m| {
+                format!(
+                    r#"{{"type":"user","timestamp":"2026-08-20T{:02}:{:02}:00.000Z"}}"#,
+                    10 + m / 60,
+                    m % 60
+                )
+            })
+            .collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let a = summarize(None, &transcript(&refs)).activity;
+        assert!(a.bucket_secs > 5, "width did not widen: {}", a.bucket_secs);
+        let total: usize = a.spans.iter().map(|s| s.buckets.len()).sum();
+        assert!(total <= MAX_BUCKETS, "{total} buckets is too many");
+    }
+
+    #[test]
+    fn prompts_carry_a_label_and_injected_context_is_left_out_of_it() {
+        let long = "x".repeat(200);
+        let t = transcript(&[
+            &format!(r#"{{"type":"user","message":{{"content":"  fix   the\n build {long}"}}}}"#),
+            r#"{"type":"user","message":{"content":[
+                {"type":"text","text":"<ide_opened_file>src/lib.rs"},
+                {"type":"text","text":"now ship it"}]}}"#,
+        ]);
+        let s = summarize(None, &t);
+        assert_eq!(s.user_involvement.len(), 2);
+        match &s.user_involvement[0] {
+            Involvement::Prompt {
+                preview, truncated, ..
+            } => {
+                assert!(preview.starts_with("fix the build xxx"), "{preview}");
+                assert_eq!(preview.chars().count(), PREVIEW_CHARS);
+                assert!(truncated);
+            }
+            other => panic!("expected a prompt, got {other:?}"),
+        }
+        match &s.user_involvement[1] {
+            Involvement::Prompt {
+                preview, truncated, ..
+            } => {
+                assert_eq!(preview, "now ship it");
+                assert!(!truncated);
+            }
+            other => panic!("expected a prompt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn questions_carry_what_was_asked_and_what_was_chosen() {
+        let t = transcript(&[
+            r#"{"type":"assistant","message":{"content":[
+                {"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[
+                    {"question":"Which store?","header":"Store","options":[
+                        {"label":"Postgres"},{"label":"SQLite"}]},
+                    {"question":"Ship now?","header":"Timing","options":[{"label":"Yes"}]}]}}]}}"#,
+            r#"{"type":"user","message":{"content":[
+                {"type":"tool_result","tool_use_id":"t1"}]},
+                "toolUseResult":{"answers":{"Which store?":"Postgres"}}}"#,
+        ]);
+        let s = summarize(None, &t);
+        assert_eq!(s.ask_user_questions, 1);
+        let questions: Vec<_> = s
+            .user_involvement
+            .iter()
+            .filter_map(|i| match i {
+                Involvement::Question {
+                    question,
+                    options,
+                    chosen,
+                    ..
+                } => Some((question.as_str(), options.len(), chosen.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            questions,
+            vec![
+                ("Which store?", 2, Some("Postgres".to_string())),
+                // Unanswered stays unanswered rather than guessing.
+                ("Ship now?", 1, None),
+            ]
+        );
     }
 
     #[test]

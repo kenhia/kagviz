@@ -7,11 +7,27 @@
 //! `docs/transcript-format.md` for what the records actually contain.
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
+
+/// Read a field that a CLI version may write as an explicit `null` where a
+/// number or object is expected.
+///
+/// `#[serde(default)]` covers an *absent* field only — a present `null` is
+/// still handed to the field's own deserializer, which rejects it and takes
+/// the whole record down with it. Observed in the wild as
+/// `"output_tokens_details": null`; one such line silently drops a turn's
+/// tokens, tool calls and timestamp from every number downstream.
+fn null_as_default<'de, D, T>(de: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(de)?.unwrap_or_default())
+}
 
 /// One transcript line.
 ///
@@ -60,7 +76,7 @@ pub struct Message {
     pub role: Option<String>,
     pub model: Option<String>,
     pub usage: Option<Usage>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub content: Content,
 }
 
@@ -131,23 +147,28 @@ pub const INJECTED_PREFIXES: &[&str] = &[
     "[Request interrupted",
 ];
 
+/// Per-turn token counts.
+///
+/// Every field is `null`-tolerant, not merely optional: these are the numbers
+/// a drifting format is most likely to blank out, and losing a whole record to
+/// one of them is the worst possible trade.
 #[derive(Debug, Deserialize, Default, Clone, Copy)]
 pub struct Usage {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub input_tokens: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub output_tokens: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub cache_read_input_tokens: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub cache_creation_input_tokens: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub output_tokens_details: OutputTokenDetails,
 }
 
 #[derive(Debug, Deserialize, Default, Clone, Copy)]
 pub struct OutputTokenDetails {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub thinking_tokens: u64,
 }
 
@@ -211,6 +232,30 @@ mod tests {
         assert_eq!(usage.output_tokens, 10);
         assert_eq!(usage.output_tokens_details.thinking_tokens, 4);
         assert_eq!(msg.content.blocks()[0].name.as_deref(), Some("Bash"));
+    }
+
+    /// Found in the corpus: one CLI version writes
+    /// `"output_tokens_details": null`. Serde's `default` does not cover a
+    /// present `null`, so the record used to be dropped whole — taking its
+    /// tool calls and timestamp with it, not just its token counts.
+    #[test]
+    fn a_null_where_a_number_belongs_does_not_drop_the_record() {
+        let line = r#"{"type":"assistant","timestamp":"2026-08-20T10:00:00.000Z","message":{
+            "usage":{"output_tokens":7,"output_tokens_details":null,"input_tokens":null},
+            "content":[{"type":"tool_use","id":"t1","name":"Bash"}]}}"#;
+        let rec: Record = serde_json::from_str(line).unwrap();
+        let usage = rec.message.as_ref().unwrap().usage.unwrap();
+        assert_eq!(usage.output_tokens, 7);
+        assert_eq!(usage.input_tokens, 0);
+        assert_eq!(usage.output_tokens_details.thinking_tokens, 0);
+        assert_eq!(rec.message.unwrap().content.blocks().len(), 1);
+    }
+
+    #[test]
+    fn a_null_content_reads_as_no_content_rather_than_a_parse_failure() {
+        let line = r#"{"type":"user","message":{"role":"user","content":null}}"#;
+        let rec: Record = serde_json::from_str(line).unwrap();
+        assert!(matches!(rec.message.unwrap().content, Content::Empty));
     }
 
     #[test]

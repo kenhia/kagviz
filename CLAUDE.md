@@ -62,8 +62,8 @@ tool mix and failures, file changes, where time went, where the user was
 involved. The audience is the person who asked for the work, not someone
 debugging the agent.
 
-Early-stage: the deterministic core works, the HTML report does not exist yet.
-Roadmap in `sprints/planning/roadmap.md`.
+Early-stage: the deterministic core works and `kagviz render` emits a
+self-contained HTML report. Roadmap in `sprints/planning/roadmap.md`.
 
 ### The rule that governs the design
 
@@ -93,6 +93,8 @@ Clippy runs with `-D warnings` over test targets too.
 - `docs/transcript-format.md` — the on-disk format and its traps. **Read this
   before touching the extractor.** It is field-derived, not documented
   upstream, and the format drifts between CLI releases.
+- `docs/facts-contract.md` — the JSON `show --json` emits, and the rules for
+  changing it. **Read this before adding or renaming a field.**
 - `src/transcript.rs` — tolerant record model. Parsing must never reject an
   unknown record type or field.
 - `src/summary.rs` — the deterministic pass.
@@ -108,6 +110,11 @@ Clippy runs with `-D warnings` over test targets too.
   number kagviz cannot see must be visibly absent, not silently zero.
 - **Report active time alongside wall time.** Either alone misleads — resumed
   sessions span days and hold minutes of work.
+- **`null` is not `default`.** `#[serde(default)]` covers an absent field, not
+  a present `null` — and a rejected field takes the whole record with it. Any
+  typed non-`Option` field needs `deserialize_with = "null_as_default"`.
+- **The renderer reads the facts, never the transcript.** If you find yourself
+  wanting a value the facts do not carry, add it to the facts.
 - When adding a field parsed for future use, annotate it and say what will read
   it. Use `#[expect(dead_code)]` where nothing reads it yet, `#[allow(...)]`
   where only tests do (an `expect` would be unfulfilled under `--all-targets`).

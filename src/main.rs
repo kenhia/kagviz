@@ -4,12 +4,16 @@
 //! Every number is derived from the transcript bytes, never inferred.
 
 mod discover;
+mod fmt;
+mod render;
 mod summary;
 mod transcript;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use summary::Summary;
 
 #[derive(Parser)]
 #[command(
@@ -41,6 +45,18 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Render a session as a self-contained HTML report.
+    Render {
+        /// Session id. Omit when reading facts with --from.
+        session_id: Option<String>,
+        /// Render a facts document written by `show --json` (`-` for stdin)
+        /// instead of reading a transcript.
+        #[arg(long, conflicts_with = "session_id", value_name = "FACTS.json")]
+        from: Option<PathBuf>,
+        /// Write the report here (default: stdout).
+        #[arg(short, long, value_name = "REPORT.html")]
+        out: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -53,6 +69,16 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Sessions { project } => list_sessions(&root, project.as_deref()),
         Command::Show { session_id, json } => show_session(&root, &session_id, json),
+        Command::Render {
+            session_id,
+            from,
+            out,
+        } => render_report(
+            &root,
+            session_id.as_deref(),
+            from.as_deref(),
+            out.as_deref(),
+        ),
     }
 }
 
@@ -69,7 +95,7 @@ fn list_sessions(root: &Path, project: Option<&str>) -> Result<()> {
             "{:<38} {:<22} {:>7} {:>7} {:>6}",
             session.id,
             truncate(&session.project, 22),
-            format_mins(s.active_secs),
+            fmt::duration(s.active_secs),
             s.total_tool_calls(),
             s.total_tool_failures(),
         );
@@ -78,21 +104,67 @@ fn list_sessions(root: &Path, project: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn show_session(root: &Path, id: &str, json: bool) -> Result<()> {
+/// Summarize one session from its transcript on disk.
+fn load_session(root: &Path, id: &str) -> Result<Summary> {
     let session = discover::sessions(root, None)?
         .into_iter()
         .find(|s| s.id == id)
         .with_context(|| format!("no session {id} under {}", root.display()))?;
     let t = transcript::read(&session.transcript)?;
-    let s = summary::summarize(Some(&session), &t);
+    Ok(summary::summarize(Some(&session), &t))
+}
+
+/// Read a facts document written by `show --json` (`-` reads stdin).
+///
+/// This is the seam the renderer is built on: whatever consumes the facts —
+/// this binary today, a front-end later — reads the same document.
+fn load_facts(path: &Path) -> Result<Summary> {
+    let raw = if path == Path::new("-") {
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .context("reading facts from stdin")?;
+        buf
+    } else {
+        std::fs::read_to_string(path)
+            .with_context(|| format!("reading facts {}", path.display()))?
+    };
+    serde_json::from_str(&raw).with_context(|| format!("parsing facts {}", path.display()))
+}
+
+fn render_report(
+    root: &Path,
+    id: Option<&str>,
+    from: Option<&Path>,
+    out: Option<&Path>,
+) -> Result<()> {
+    let summary = match (id, from) {
+        (_, Some(path)) => load_facts(path)?,
+        (Some(id), None) => load_session(root, id)?,
+        (None, None) => bail!("give a session id, or --from <facts.json>"),
+    };
+    let html = render::report(&summary);
+    match out {
+        Some(path) => {
+            std::fs::write(path, &html)
+                .with_context(|| format!("writing report {}", path.display()))?;
+            eprintln!("wrote {} ({} bytes)", path.display(), html.len());
+        }
+        None => print!("{html}"),
+    }
+    Ok(())
+}
+
+fn show_session(root: &Path, id: &str, json: bool) -> Result<()> {
+    let s = load_session(root, id)?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&s)?);
         return Ok(());
     }
 
-    println!("session   {}", session.id);
-    println!("project   {}", session.project);
+    println!("session   {}", s.session_id.as_deref().unwrap_or(id));
+    println!("project   {}", s.project.as_deref().unwrap_or("-"));
     if let Some(cwd) = &s.cwd {
         println!("cwd       {cwd}");
     }
@@ -103,9 +175,9 @@ fn show_session(root: &Path, id: &str, json: bool) -> Result<()> {
     );
     println!(
         "time      {} active / {} wall ({} idle)",
-        format_mins(s.active_secs),
-        format_mins(s.wall_secs),
-        format_mins(s.idle_secs)
+        fmt::duration(s.active_secs),
+        fmt::duration(s.wall_secs),
+        fmt::duration(s.idle_secs)
     );
     println!(
         "turns     {} assistant, {} user prompts",
@@ -178,17 +250,5 @@ fn truncate(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         s.chars().take(max - 1).collect()
-    }
-}
-
-fn format_mins(secs: i64) -> String {
-    if secs < 60 {
-        return format!("{secs}s");
-    }
-    let mins = secs / 60;
-    if mins < 60 {
-        format!("{mins}m")
-    } else {
-        format!("{}h{:02}m", mins / 60, mins % 60)
     }
 }

@@ -6,3 +6,5 @@ target/
 # Added by cargo
 
 /target
+
+.korg-sprint-proposal

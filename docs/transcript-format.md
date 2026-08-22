@@ -5,7 +5,8 @@ was established by inspecting real transcripts; nothing is from documentation.
 The format is undocumented and drifts between CLI releases, so treat this as a
 field guide with a date on it rather than a spec.
 
-_Last checked against CLI 2.1.219 – 2.1.238, August 2026._
+_Last checked against CLI 2.1.209 – 2.1.238, August 2026, over 197 transcripts on
+kai (Linux) and 108 on cleo (Windows)._
 
 ## Layout on disk
 
@@ -47,7 +48,7 @@ and never rejects an unknown `type`.
 | `toolUseResult` | Tool-specific result payload. Shape varies per tool. |
 | `isSidechain` | Older format's subagent marker. Newer versions write `subagents/` files instead and leave this `false`. |
 
-## Three traps
+## Four traps
 
 ### 1. `promptId` does not mark a prompt
 
@@ -99,12 +100,63 @@ untrustworthy.
 This matters more than it sounds. Under some agent instructions, shell editing
 is the *default*, so the undercount is systematic rather than occasional.
 
+### 4. `null` is not the same as absent
+
+At least one CLI version writes
+
+```json
+"usage": { "output_tokens": 118, "output_tokens_details": null }
+```
+
+Serde's `#[serde(default)]` covers an **absent** field only. A field that is
+present and `null` is still handed to that field's own deserializer, which
+rejects it — and the failure is not scoped to the field. The whole record is
+rejected, so the line is skipped and that turn's **tool calls, timestamp and
+model** vanish along with its token counts. One such line in a 4,000-line
+transcript is a silent hole in every number downstream, and nothing about the
+output looks wrong.
+
+The fix is a `null_as_default` deserializer (`Option::<T>::deserialize` then
+`unwrap_or_default`) on every non-`Option` field that carries a `default`. See
+`src/transcript.rs`. Assume the next drift of this kind is already on disk:
+when adding a typed field, make it either `Option` or `null`-tolerant, never
+merely defaulted.
+
+Frequency, measured: exactly **1** occurrence across 305 transcripts, in one
+line of one session. It cost nothing to find only because the corpus sweep
+asserts *zero* skipped lines rather than "few".
+
+## Line endings
+
+Transcripts are written **LF even on Windows** — checked across 40 cleo
+transcripts, none CRLF. Do not rely on that: `read()` trims each line, so a
+stray `\r` is absorbed either way.
+
 ## What else is recoverable
 
 Already extracted: tool calls by name, failures joined to their call via
 `tool_use_id`, `AskUserQuestion` calls with full question text and options,
 `Skill` invocations, subagent spawns with `subagent_type` and `resolvedModel`,
 pasted images and documents.
+
+**`AskUserQuestion` answers.** The question text and options are in the
+`tool_use` block's `input.questions[]`. What the user *chose* is in the
+`toolUseResult` of the matching result record, under `answers` — an object
+keyed by the **question text itself**, valued with the chosen option's `label`:
+
+```json
+"toolUseResult": {
+  "questions": [ … ],
+  "answers": { "Which store?": "Postgres" },
+  "annotations": { … }
+}
+```
+
+Join on `tool_use_id`, then on the question string. The `tool_result` block's
+`content` prose says the same thing, but it is a formatted sentence with the
+answers interpolated — parse `answers`, not the sentence. A question with no
+matching key was never answered (an interrupted prompt); record that as unknown
+rather than assuming the first option.
 
 Not yet extracted, but present: hook fire counts and errors
 (`stop_hook_summary`), API errors, permission-mode and plan-mode transitions,

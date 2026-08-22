@@ -7,20 +7,26 @@ kagviz turns a session transcript into insight about how the agent worked.
 The governing split: **everything countable is computed deterministically; a
 model is used only to write the headline over facts already established.**
 
-## Now
+## Shipped
 
 - **Sprint 001 — static HTML report.** `kagviz render <session-id>` emits a
   self-contained HTML page from the facts JSON: tool mix with failures, file
-  changes, a time strip showing active vs idle, and markers where the user was
-  involved. Static output first, because it is the cheapest thing to look at
-  and argue about.
+  changes, a time strip collapsing idle, and markers where the user was
+  involved. The facts contract grew `activity` and `user_involvement`, both
+  additively. Verified on 305 transcripts across Linux and Windows; the same
+  facts render byte-identically on both. See
+  `sprints/001-static-html-session-report.md`.
 
-## Next
+## Now
 
 - **Timeline segmentation.** Cut phases at user-turn boundaries and label each
   segment deterministically by its tool mix (Read-heavy → exploring,
   Edit + test → implementing). This is the skeleton the interactive view
-  needs, and it must exist before any model gets involved.
+  needs, and it must exist before any model gets involved. The activity series
+  from 001 is what it segments over.
+
+## Next
+
 - **The headline pass.** Optional LLM labels for segments and a
   session-level one-liner, cached beside the transcript so a rendered report
   stays byte-stable once produced. Strictly additive: the facts never move.

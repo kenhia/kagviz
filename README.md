@@ -16,8 +16,8 @@ already counted — never to produce the facts.
 ## Status
 
 Early, but usable. The deterministic core reads transcripts and summarizes
-them, and `kagviz render` writes a self-contained HTML report. Timeline
-segmentation and the optional model-written headline are next; see
+them, `kagviz render` writes a self-contained HTML report, and the session is
+cut into labelled phases. The optional model-written headline is next; see
 `sprints/planning/roadmap.md`.
 
 ```console
@@ -27,11 +27,11 @@ SESSION                                PROJECT                 ACTIVE   TOOLS   
 
 $ kagviz show 63a9b83b-9e7b-4f77-8ac2-df66ecd0407e
 time      38m active / 2h30m wall (1h52m idle)
-turns     226 assistant, 26 user prompts
-tools     83 calls, 2 failed
-            28  Bash  (2 failed)
-            19  Read
-             5  Edit
+phases    44 (mostly running)
+               5  running       12m
+               3  mixed         8m
+              26  discussing    5m
+               4  filing        4m
 files     3 touched, +57/-3  [28 opaque shell call(s) unaccounted]
 ```
 
@@ -48,8 +48,9 @@ wrote report.html (52107 bytes)
 
 One file, no external assets — no CDN, no web fonts, no scripts — so it opens
 with no network, mails as an attachment, and still renders in five years. It
-carries session identity, a headline row, the time strip, the tool mix with
-failures, file changes, token totals, and the moments the user was involved.
+carries session identity, a headline row, the time strip with its phase bands,
+where the time went by phase, the tool mix with failures, file changes, token
+totals, and the moments the user was involved.
 
 The renderer reads the **facts document**, never the transcript, which keeps
 that seam honest and lets you render from a saved file or a pipe:
@@ -77,13 +78,30 @@ Ticks above the columns mark where the user was involved. Green is a prompt;
 amber is a question the agent stopped to ask — and the list below the strip
 shows what was asked, what the options were, and which one was chosen.
 
+### Phases
+
+Above the columns runs a band of **phases**: the session cut into stretches of
+work and each one named by its tool mix. The cut is at every user turn — that
+is where the work was redirected — and at every idle break, so a phase can
+never span a gap and report a three-day pause as its own duration.
+
+The names are mechanical, and deliberately so. `implementing` means files were
+edited here; `running` means mostly shell, which under agent instructions that
+prefer shell editing may well *be* editing kagviz cannot see. They describe the
+tools, not the intent. A descriptive label is a separate, later field written by
+a model over these facts — it will never overwrite this one.
+
 ## Reading the output honestly
 
 Two numbers deserve care, and both are there because leaving them out would
 quietly lie:
 
 - **active vs wall** — a resumed session can span days and hold an hour of
-  work. Gaps of 2 minutes or more are counted as idle, not effort.
+  work. Gaps of 2 minutes or more are counted as idle, not effort. Both are on
+  the page: active is the headline, wall is its sub-label, because either one
+  alone misleads.
+- **phase labels name a tool mix**, never an intent. See above — this is the
+  easiest thing here to over-read.
 - **opaque shell calls** — edits made through the shell leave no recoverable
   diff, so the line deltas are a floor, not a total. The report says so on the
   page rather than showing a confident zero.

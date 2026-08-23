@@ -91,6 +91,68 @@ scale. Measured over 305 transcripts, the ladder has never bottomed out.
 Buckets carry counts only. What the work *was* is deliberately absent:
 segmentation and labelling are later work, and neither belongs in a bucket.
 
+### `phases` — the session cut into stretches of work
+
+Added in sprint 002, additively: nothing above moved.
+
+```json
+"phases": [
+  { "started": "…", "ended": "…", "secs": 840, "span": 0,
+    "kind": "implementing", "records": 96, "tool_calls": 61,
+    "tool_failures": 2, "output_tokens": 41207,
+    "mix": { "read": 12, "edit": 9, "run": 38, "org": 2,
+             "ask": 0, "delegate": 0, "other": 0 },
+    "opened_by": "fix the failing test" }
+]
+```
+
+A phase is cut at **two** kinds of boundary, and both matter:
+
+- **Every user turn**, because that is where the work was redirected.
+- **Every idle break**, so a phase never spans a gap. `span` names the
+  `activity.spans` entry it lies inside. Cutting only at user turns would let
+  one phase quietly contain a three-day pause and report it as its own
+  duration — the wall-clock lie one level up.
+
+A phase runs until the next one **starts**, not until its own last record: the
+seconds between an agent's last tool call and the user's next turn are real
+work, and giving them to neither phase would make the durations fail to add up
+with nothing on the page to show it. So **the phases of one span sum to exactly
+that span's `secs`**, milliseconds and all.
+
+They do *not* sum to `active_secs`. That difference is older than this field:
+`active_secs` is `wall_secs - idle_secs`, two truncations, while the spans
+truncate once each — on the corpus's 209-span session the two disagree by 198
+seconds out of 12h39m. Phases inherit it; they did not introduce it.
+
+`opened_by` is the preview of the user turn that opened the phase, and is
+**absent** when the phase opens a resumed span instead: work picked up again
+with nothing said. Absent is the honest reading; attributing it to the previous
+prompt would be an invention.
+
+#### `kind` and `mix`
+
+`kind` is one of `exploring`, `implementing`, `running`, `filing`,
+`delegating`, `discussing`, `mixed`. These name a **tool mix, not an intent** —
+`implementing` means files were edited here, and `running` means mostly shell,
+which under agent instructions that prefer shell editing may well be editing
+kagviz cannot see. A descriptive label is a later, separate field written by a
+model over these facts; it will never overwrite this one.
+
+`mix` carries the counts `kind` was derived from, so the label can be checked
+rather than believed. Tools are classified by a small table; MCP tools are
+classified by their **operation**, matched exactly, so a file server (`read`,
+`edit`) and a tracker (`list_work_items`, `create_work_item`) do not read as
+the same activity. Anything unrecognised lands in `other`, which dilutes every
+share equally rather than distorting one.
+
+The thresholds live in `summary.rs` and are integer percentages, compared with
+integer arithmetic — the same argument as `bucket_secs`, one step further: two
+renderings of one session must not disagree about what a phase was, and a
+float comparison is one platform difference away from doing so. The order the
+rules are tested in is part of the rule; editing is deliberately cheap to earn,
+because a change is almost always preceded by a lot of reading.
+
 ### `user_involvement` — the decision points
 
 An ordered array, tagged by `kind`:

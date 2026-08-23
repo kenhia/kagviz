@@ -10,7 +10,7 @@
 //! network in five years, and can be mailed or archived as one artifact.
 
 use crate::fmt;
-use crate::summary::{Bucket, Involvement, Summary};
+use crate::summary::{ActivitySpan, Bucket, Involvement, Phase, Summary};
 use chrono::{DateTime, SecondsFormat, Utc};
 use std::collections::BTreeMap;
 
@@ -35,12 +35,14 @@ pub fn report(s: &Summary) -> String {
     }
     headline(&mut h, s);
     time_strip(&mut h, s);
+    phases_section(&mut h, s);
+    // Three siblings, not a nested column: the grid decides how many fit, so
+    // a wide screen gets three across instead of one card and a lot of nothing.
     h.push_str("<div class=\"cols\">\n");
     tool_mix(&mut h, s);
-    h.push_str("<div class=\"col\">\n");
     file_changes(&mut h, s);
     tokens(&mut h, s);
-    h.push_str("</div>\n</div>\n");
+    h.push_str("</div>\n");
     involvement(&mut h, s);
     delegation(&mut h, s);
 
@@ -80,16 +82,34 @@ fn header(h: &mut String, s: &Summary) {
     h.push_str("</dl>\n</header>\n");
 }
 
+/// The four numbers that answer "how did this go" at a glance.
+///
+/// Active time is the headline and wall clock is its sub-label rather than its
+/// peer. Both have to be on the page — active alone is dishonest about a
+/// session resumed over three days, which is why `transcript-format.md` trap #2
+/// exists — but equal billing put the eye on the bigger, less meaningful
+/// number. Wall reads as the context for active, which is what it is.
 fn headline(h: &mut String, s: &Summary) {
     let failures = s.total_tool_failures();
     h.push_str("<section class=\"stats\">\n");
-    stat(h, "active", &fmt::duration(s.active_secs), "hands on keys");
     stat(
         h,
-        "wall",
-        &fmt::duration(s.wall_secs),
-        &format!("{} idle", fmt::duration(s.idle_secs)),
+        "active",
+        &fmt::duration(s.active_secs),
+        &format!(
+            "over {} wall · {} idle",
+            fmt::duration(s.wall_secs),
+            fmt::duration(s.idle_secs)
+        ),
     );
+    if let Some(dominant) = s.dominant_phase() {
+        stat(
+            h,
+            "phases",
+            &s.phases.len().to_string(),
+            &format!("mostly {}", dominant.label()),
+        );
+    }
     stat(
         h,
         "turns",
@@ -130,11 +150,19 @@ fn time_strip(h: &mut String, s: &Summary) {
     ));
     // Break labels need room to sit in; past a dozen stretches there is none,
     // and the durations live in the tooltips instead.
-    let roomy = a.spans.len() <= 12;
-    h.push_str(&format!(
-        "<div class=\"strip {}\">\n",
-        if roomy { "roomy" } else { "dense" }
-    ));
+    let roomy = a.spans.len() <= LABELLED_BREAKS_MAX;
+    // ...and past sixty, the fixed-width breaks themselves start eating the
+    // strip. On the corpus's 209-span session, 208 breaks at 6px each claimed
+    // 1248px while the work columns were squeezed onto their 2px floor: the
+    // panel that exists to collapse idle was rendering 72% idle. A break only
+    // has to be *visible*, not proportional — its duration is deliberately not
+    // to scale — so above this many it narrows and gives the width back.
+    let class = match a.spans.len() {
+        n if n <= LABELLED_BREAKS_MAX => "roomy",
+        n if n <= NARROW_BREAKS_MIN => "dense",
+        _ => "packed",
+    };
+    h.push_str(&format!("<div class=\"strip {class}\">\n"));
 
     for (si, span) in a.spans.iter().enumerate() {
         if span.idle_before_secs > 0 {
@@ -149,9 +177,11 @@ fn time_strip(h: &mut String, s: &Summary) {
             h.push_str("</div>\n");
         }
         h.push_str(&format!(
-            "<div class=\"span\" style=\"flex-grow:{}\">\n<div class=\"cols-b\">\n",
+            "<div class=\"span\" style=\"flex-grow:{}\">\n",
             span.buckets.len()
         ));
+        phase_bands(h, s, si, span);
+        h.push_str("<div class=\"cols-b\">\n");
         for (bi, bucket) in span.buckets.iter().enumerate() {
             let at = span.started + chrono::Duration::seconds(bi as i64 * a.bucket_secs);
             let mark = marks.get(&(si, bi));
@@ -174,6 +204,196 @@ fn time_strip(h: &mut String, s: &Summary) {
          <span class=\"key mkask\"></span>question asked \
          <span class=\"key gapkey\"></span>idle, collapsed</p>\n",
     );
+    h.push_str("</section>\n");
+}
+
+/// Above this many stretches of work there is no room to label the breaks.
+const LABELLED_BREAKS_MAX: usize = 12;
+/// Above this many, the breaks narrow so the work columns keep the width.
+/// Sixty 6px breaks is about 350px — a quarter of a typical strip, and the
+/// most idle should ever take on a panel whose job is collapsing it.
+///
+/// Narrowing further is not the answer, and this is the place someone would
+/// try it. Past a few hundred stretches the breaks are noise however thin they
+/// are, and that is the same density at which the whole strip stops being
+/// legible — the fix there is zooming it (#1591), not shaving pixels here.
+const NARROW_BREAKS_MIN: usize = 60;
+
+/// The phase band over one span's columns.
+///
+/// A bucket belongs to whichever phase was running when it opened. At a wide
+/// bucket width several phases can fall inside one column and only the first
+/// gets drawn — [`phases_section`] reports how many that cost, because a
+/// silently dropped phase would read as a phase that never happened.
+fn phase_bands(h: &mut String, s: &Summary, si: usize, span: &ActivitySpan) {
+    let runs = bands_for_span(s, si, span);
+    if runs.is_empty() {
+        return;
+    }
+    h.push_str("<div class=\"bands\">");
+    for (pi, columns) in runs {
+        let p = &s.phases[pi];
+        h.push_str(&format!(
+            "<div class=\"band ph-{}\" style=\"flex-grow:{columns}\" title=\"{}\">\
+             <span>{}</span></div>",
+            p.kind.label(),
+            esc(&phase_tip(p)),
+            esc(p.kind.label()),
+        ));
+    }
+    h.push_str("</div>\n");
+}
+
+/// Runs of `(phase index, columns)` covering a span's buckets, left to right.
+fn bands_for_span(s: &Summary, si: usize, span: &ActivitySpan) -> Vec<(usize, usize)> {
+    let width = s.activity.bucket_secs.max(1);
+    let here: Vec<usize> = (0..s.phases.len())
+        .filter(|&i| s.phases[i].span == si)
+        .collect();
+    if here.is_empty() {
+        return Vec::new();
+    }
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    let mut cur = 0;
+    for bi in 0..span.buckets.len() {
+        let at = span.started + chrono::Duration::seconds(bi as i64 * width);
+        while cur + 1 < here.len() && s.phases[here[cur + 1]].started <= at {
+            cur += 1;
+        }
+        match runs.last_mut() {
+            Some((last, columns)) if *last == here[cur] => *columns += 1,
+            _ => runs.push((here[cur], 1)),
+        }
+    }
+    runs
+}
+
+/// How many phases the strip could not give a column of its own.
+fn phases_without_a_band(s: &Summary) -> usize {
+    let drawn: usize = s
+        .activity
+        .spans
+        .iter()
+        .enumerate()
+        .map(|(si, span)| bands_for_span(s, si, span).len())
+        .sum();
+    s.phases.len().saturating_sub(drawn)
+}
+
+fn phase_tip(p: &Phase) -> String {
+    let mut tip = format!(
+        "{} · {} · {}",
+        p.kind.label(),
+        clock(&p.started),
+        fmt::duration(p.secs)
+    );
+    if p.tool_calls > 0 {
+        tip.push_str(&format!(" · {} tool call(s)", p.tool_calls));
+    }
+    if p.tool_failures > 0 {
+        tip.push_str(&format!(", {} failed", p.tool_failures));
+    }
+    if let Some(opened) = &p.opened_by {
+        tip.push_str(" — ");
+        tip.push_str(&label_of(opened));
+    }
+    tip
+}
+
+fn mix_line(p: &Phase) -> String {
+    p.mix
+        .parts()
+        .iter()
+        .map(|(name, n)| format!("{name} {n}"))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// Past this many phases the ordered list stops being readable and the
+/// longest ones are shown instead. The count that was dropped is always said.
+const PHASE_LIST_MAX: usize = 30;
+const PHASE_LIST_LONGEST: usize = 15;
+
+/// Where the time went, by phase.
+///
+/// The rollup comes first because it is the answer most sessions want; the
+/// ordered list is the narrative under it. Neither invents a name — every
+/// label here is the mechanical one the facts carry.
+fn phases_section(h: &mut String, s: &Summary) {
+    if s.phases.is_empty() {
+        return;
+    }
+    h.push_str("<section class=\"card\">\n<h2>Phases</h2>\n");
+    h.push_str(&format!(
+        "<p class=\"note\">{} phase(s), cut at every user turn and at every idle break. \
+         A phase never spans a gap, and the phases in one stretch of work account for \
+         all of it. Labels name the tool mix, not the intent.</p>\n",
+        s.phases.len()
+    ));
+
+    let rollup = s.phase_rollup();
+    let peak = rollup.first().map_or(1, |(_, _, secs)| (*secs).max(1));
+    h.push_str("<ul class=\"bars\">\n");
+    for (kind, n, secs) in &rollup {
+        h.push_str(&format!(
+            "<li><span class=\"name\">{}</span>\
+             <span class=\"track\">\
+             <span class=\"fill ph-{}\" style=\"width:{:.3}%\"></span>\
+             </span><span class=\"n\">{} · {n} phase(s)</span></li>\n",
+            esc(kind.label()),
+            kind.label(),
+            *secs as f64 * 100.0 / peak as f64,
+            esc(&fmt::duration(*secs)),
+        ));
+    }
+    h.push_str("</ul>\n");
+
+    let mut shown: Vec<&Phase> = s.phases.iter().collect();
+    let omitted = if shown.len() > PHASE_LIST_MAX {
+        shown.sort_by(|a, b| b.secs.cmp(&a.secs).then(a.started.cmp(&b.started)));
+        shown.truncate(PHASE_LIST_LONGEST);
+        shown.sort_by_key(|p| p.started);
+        s.phases.len() - PHASE_LIST_LONGEST
+    } else {
+        0
+    };
+    if omitted > 0 {
+        h.push_str(&format!(
+            "<p class=\"note\">Listing the {PHASE_LIST_LONGEST} longest; {omitted} shorter \
+             phase(s) are not shown. The band on the strip above is the full sequence.</p>\n"
+        ));
+    }
+
+    h.push_str("<ol class=\"turns phases\">\n");
+    for p in shown {
+        h.push_str(&format!(
+            "<li class=\"ph-{}\"><span class=\"when\">{}</span><span class=\"what\">\
+             <span class=\"chip kind\">{}</span> <strong>{}</strong>",
+            p.kind.label(),
+            esc(&clock(&p.started)),
+            esc(p.kind.label()),
+            esc(&fmt::duration(p.secs)),
+        ));
+        match &p.opened_by {
+            Some(opened) => h.push_str(&format!(" — {}", esc(&label_of(opened)))),
+            None => h.push_str(" — <em class=\"resumed\">resumed, nothing said</em>"),
+        }
+        let mix = mix_line(p);
+        if !mix.is_empty() {
+            h.push_str(&format!("<br><span class=\"opts\">{}</span>", esc(&mix)));
+        }
+        h.push_str("</span></li>\n");
+    }
+    h.push_str("</ol>\n");
+
+    let unbanded = phases_without_a_band(s);
+    if unbanded > 0 {
+        h.push_str(&format!(
+            "<p class=\"note unknown\">{unbanded} phase(s) are shorter than one column at \
+             this scale and carry no band on the strip. They are counted here — the strip \
+             cannot draw them, which is not the same as their not existing.</p>\n"
+        ));
+    }
     h.push_str("</section>\n");
 }
 
@@ -262,7 +482,7 @@ fn label_of(preview: &str) -> String {
 }
 
 fn tool_mix(h: &mut String, s: &Summary) {
-    h.push_str("<section class=\"card col\">\n<h2>Tools</h2>\n");
+    h.push_str("<section class=\"card wide\">\n<h2>Tools</h2>\n");
     if s.tool_calls.is_empty() {
         h.push_str("<p class=\"note\">No tool calls in this session.</p>\n</section>\n");
         return;
@@ -490,18 +710,29 @@ const CSS: &str = r#"
   --bg:#faf9f7; --panel:#fff; --ink:#1b1a18; --muted:#6d6a63; --line:#e4e0d9;
   --accent:#35618f; --bar:#7ea3c9; --fail:#b8412f; --add:#2f7d4f; --del:#b8412f;
   --user:#4a7c4e; --ask:#a06a1f; --warnbg:#fdf3e6; --chip:#efece6;
+  --ph-ink:#fff;
+  --ph-exploring:#6b93bd; --ph-implementing:#3f8760; --ph-running:#7a6fa6;
+  --ph-filing:#a06a1f; --ph-delegating:#3d8b93; --ph-discussing:#8c887f;
+  --ph-mixed:#a8a299;
 }
 @media (prefers-color-scheme: dark){
   :root{
     --bg:#16181a; --panel:#1e2124; --ink:#e6e3dd; --muted:#9a958c; --line:#2f3439;
     --accent:#7fb0e0; --bar:#5b87b5; --fail:#e07a63; --add:#68b884; --del:#e07a63;
     --user:#7cb87f; --ask:#d9a34e; --warnbg:#2c2519; --chip:#2a2e33;
+    --ph-ink:#12161a;
+    --ph-exploring:#7fa9d1; --ph-implementing:#63b189; --ph-running:#9d92c9;
+    --ph-filing:#d9a34e; --ph-delegating:#5fb0b8; --ph-discussing:#9a958c;
+    --ph-mixed:#807b73;
   }
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);
   font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
-main{max-width:1000px;margin:0 auto;padding:32px 20px 64px}
+/* A wide monitor is more information, not more background — but only for the
+   panels that can use it. The strip and the card grid take the full width;
+   anything prose-shaped keeps a readable measure with its own max-width. */
+main{max-width:1480px;margin:0 auto;padding:32px 24px 64px}
 h1{font-size:24px;margin:0 0 12px;letter-spacing:-.01em}
 h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);
   margin:0 0 12px;font-weight:600}
@@ -510,12 +741,16 @@ dl.meta{display:grid;grid-template-columns:auto 1fr;gap:2px 14px;margin:0;font-s
 dl.meta dt{color:var(--muted)}
 dl.meta dd{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   overflow-wrap:anywhere}
+header dl.meta{max-width:96ch}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
   padding:16px 18px;margin-bottom:16px}
-.cols{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
-.cols>*{flex:1 1 320px;min-width:0}
-.col{margin-bottom:0}
+.cols{display:grid;gap:16px;align-items:start;
+  grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.cols>*{min-width:0}
 .cols .card{margin-bottom:16px}
+/* Wide enough for three: the tool bars get the double track they need and the
+   two short panels sit beside them instead of below. */
+@media (min-width:1180px){ .cols{grid-template-columns:2fr 1fr 1fr} }
 .stats{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px}
 .stat{flex:1 1 140px;background:var(--panel);border:1px solid var(--line);border-radius:10px;
   padding:12px 14px;display:flex;flex-direction:column;gap:2px}
@@ -552,6 +787,9 @@ dl.meta dd{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monos
   border-left:1px dashed var(--line);border-right:1px dashed var(--line)}
 .strip.roomy .gap{flex:0 0 32px}
 .strip.dense .gap{flex:0 0 6px}
+/* At this density the dashed borders would be the whole break, so drop them
+   and let the hatch itself be the mark. */
+.strip.packed .gap{flex:0 0 3px;border-left-width:0;border-right-width:0}
 .gap span{font-size:10px;color:var(--muted);background:var(--panel);padding:1px 3px;
   border-radius:3px;transform:rotate(-90deg);white-space:nowrap}
 .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);
@@ -563,9 +801,40 @@ dl.meta dd{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monos
 .key.gapkey{background:repeating-linear-gradient(135deg,transparent 0 3px,var(--line) 3px 4px);
   border:1px solid var(--line)}
 
+/* phase bands, aligned to the columns beneath them */
+.bands{display:flex;gap:1px;padding:0 1px;margin-bottom:3px}
+.band{flex:1 1 0;min-width:0;height:15px;border-radius:3px;overflow:hidden;
+  display:flex;align-items:center;justify-content:center}
+.band span{font-size:9.5px;line-height:1;color:var(--ph-ink);letter-spacing:.02em;
+  white-space:nowrap;overflow:hidden;padding:0 2px}
+.ph-exploring{background:var(--ph-exploring)}
+.ph-implementing{background:var(--ph-implementing)}
+.ph-running{background:var(--ph-running)}
+.ph-filing{background:var(--ph-filing)}
+.ph-delegating{background:var(--ph-delegating)}
+.ph-discussing{background:var(--ph-discussing)}
+.ph-mixed{background:var(--ph-mixed)}
+ol.phases li{background:none}
+ol.phases li.ph-exploring{border-left-color:var(--ph-exploring)}
+ol.phases li.ph-implementing{border-left-color:var(--ph-implementing)}
+ol.phases li.ph-running{border-left-color:var(--ph-running)}
+ol.phases li.ph-filing{border-left-color:var(--ph-filing)}
+ol.phases li.ph-delegating{border-left-color:var(--ph-delegating)}
+ol.phases li.ph-discussing{border-left-color:var(--ph-discussing)}
+ol.phases li.ph-mixed{border-left-color:var(--ph-mixed)}
+ol.phases .chip.kind{color:var(--ink)}
+ol.phases .resumed{color:var(--muted);font-style:italic}
+ul.bars .fill.ph-exploring{background:var(--ph-exploring)}
+ul.bars .fill.ph-implementing{background:var(--ph-implementing)}
+ul.bars .fill.ph-running{background:var(--ph-running)}
+ul.bars .fill.ph-filing{background:var(--ph-filing)}
+ul.bars .fill.ph-delegating{background:var(--ph-delegating)}
+ul.bars .fill.ph-discussing{background:var(--ph-discussing)}
+ul.bars .fill.ph-mixed{background:var(--ph-mixed)}
+
 /* tool bars */
 ul.bars{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
-ul.bars li{display:grid;grid-template-columns:minmax(0,140px) 1fr auto;gap:10px;
+ul.bars li{display:grid;grid-template-columns:minmax(0,180px) 1fr auto;gap:10px;
   align-items:center;font-size:13px}
 ul.bars .name{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -583,7 +852,7 @@ ol.turns li.prompt{border-left-color:var(--user)}
 ol.turns li.ask{border-left-color:var(--ask)}
 ol.turns .when{color:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums;
   padding-top:2px;white-space:nowrap}
-ol.turns .what{min-width:0;overflow-wrap:anywhere}
+ol.turns .what{min-width:0;overflow-wrap:anywhere;max-width:104ch}
 .chose{color:var(--accent);font-weight:600;font-size:12.5px}
 .chose.none{color:var(--muted);font-weight:400;font-style:italic}
 .opts{color:var(--muted);font-size:11.5px}
@@ -675,6 +944,95 @@ mod tests {
         assert!(html.contains("https://example.invalid/spec"));
     }
 
+    /// Wall clock stays on the page — trap #2 exists because active-alone is
+    /// dishonest about a resumed session — but it is no longer a tile of its
+    /// own competing with active for the eye.
+    #[test]
+    fn wall_clock_is_kept_but_is_no_longer_a_peer_of_active() {
+        let html = render_lines(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "content":"go"}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:30.000Z"}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T12:00:30.000Z"}"#,
+        ]);
+        assert!(
+            html.contains(r#"<span class="k">active</span>"#),
+            "active is still the headline"
+        );
+        assert!(
+            !html.contains(r#"<span class="k">wall</span>"#),
+            "wall no longer has a tile of its own"
+        );
+        // ...but the number itself is still there, and so is idle.
+        assert!(html.contains("over 2h00m wall · 2h00m idle"));
+    }
+
+    #[test]
+    fn the_strip_carries_a_band_for_each_phase() {
+        let html = render_lines(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "content":"look around"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:20.000Z","message":{
+                "content":[{"type":"tool_use","id":"t1","name":"Read"}]}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:40.000Z","message":{
+                "content":"now change it"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:01:00.000Z","message":{
+                "content":[{"type":"tool_use","id":"t2","name":"Edit"}]}}"#,
+        ]);
+        assert!(html.contains(r#"class="band ph-exploring""#));
+        assert!(html.contains(r#"class="band ph-implementing""#));
+        // The phase that was opened by a prompt says which prompt.
+        assert!(html.contains("now change it"));
+        // 40s exploring against 20s implementing: the headline names the kind
+        // that holds the most *time*, not the one that ran last.
+        assert!(html.contains("mostly exploring"));
+    }
+
+    /// A phase the strip cannot draw is still a phase. Same instinct as
+    /// `opaque_edits`: what the page cannot show, it says it cannot show.
+    #[test]
+    fn a_phase_too_short_to_draw_is_counted_rather_than_dropped() {
+        let html = render_lines(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "content":"one"}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:01.000Z","message":{
+                "content":"two"}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:02.000Z","message":{
+                "content":"three"}}"#,
+        ]);
+        // Three phases inside a two-second span: one bucket, one band.
+        assert!(html.contains("2 phase(s) are shorter than one column"));
+        assert!(html.contains("not the same as their not existing"));
+    }
+
+    /// The phase durations are the answer to "where did the time go", so
+    /// within a stretch of work they have to account for all of it.
+    #[test]
+    fn phase_durations_account_for_every_second_of_their_span() {
+        let t = Transcript {
+            records: [
+                r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                    "content":"a"}}"#,
+                r#"{"type":"assistant","timestamp":"2026-08-20T10:00:20.000Z","message":{
+                    "content":[{"type":"tool_use","id":"t1","name":"Read"}]}}"#,
+                r#"{"type":"user","timestamp":"2026-08-20T10:01:40.000Z","message":{
+                    "content":"b"}}"#,
+                r#"{"type":"assistant","timestamp":"2026-08-20T12:00:00.000Z","message":{
+                    "content":[{"type":"tool_use","id":"t2","name":"Edit"}]}}"#,
+            ]
+            .iter()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect(),
+            skipped: 0,
+        };
+        let s = summarize(None, &t);
+        assert_eq!(
+            s.phases.iter().map(|p| p.secs).sum::<i64>(),
+            s.activity.spans.iter().map(|sp| sp.secs).sum::<i64>()
+        );
+        assert!(report(&s).contains("account for all of it"));
+    }
+
     #[test]
     fn prompt_text_is_escaped_rather_than_injected() {
         let html = render_lines(&[
@@ -703,6 +1061,50 @@ mod tests {
             r#"{"type":"user","timestamp":"2026-08-20T12:00:30.000Z"}"#,
         ]);
         assert!(html.contains(r#"class="gap" title="2h00m idle""#));
+    }
+
+    /// The strip exists to collapse idle, so idle must not end up owning it.
+    /// At 209 stretches the fixed 6px breaks claimed 1248px while the work
+    /// columns sat on their 2px floor — 72% of the panel was hatching. Found
+    /// by looking at a rendered report, not by a test.
+    #[test]
+    fn breaks_narrow_once_they_would_crowd_out_the_work() {
+        // One record every ten minutes: every gap is idle, so records == spans.
+        let lines: Vec<String> = (0..NARROW_BREAKS_MIN + 5)
+            .map(|i| {
+                format!(
+                    r#"{{"type":"user","timestamp":"2026-08-20T{:02}:{:02}:00.000Z"}}"#,
+                    10 + (i * 10) / 60,
+                    (i * 10) % 60
+                )
+            })
+            .collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let html = render_lines(&refs);
+        assert!(html.contains(r#"<div class="strip packed">"#));
+
+        // A moderate session keeps the wider, more legible break.
+        let html = render_lines(&refs[..20]);
+        assert!(html.contains(r#"<div class="strip dense">"#));
+
+        // And a short one still labels them.
+        let html = render_lines(&refs[..5]);
+        assert!(html.contains(r#"<div class="strip roomy">"#));
+    }
+
+    /// A 54-day session must not render its wall clock as `1297h15m` — that
+    /// is the number #1557 moved into the sub-label to keep it readable.
+    #[test]
+    fn a_multi_day_wall_clock_reads_in_days() {
+        let html = render_lines(&[
+            r#"{"type":"user","timestamp":"2026-06-13T00:47:18.000Z"}"#,
+            r#"{"type":"user","timestamp":"2026-08-06T02:02:39.000Z"}"#,
+        ]);
+        assert!(
+            html.contains("over 54d01h wall"),
+            "wall clock still in hours"
+        );
+        assert!(!html.contains("1297h"));
     }
 
     #[test]

@@ -179,6 +179,16 @@ fn show_session(root: &Path, id: &str, json: bool) -> Result<()> {
         fmt::duration(s.wall_secs),
         fmt::duration(s.idle_secs)
     );
+    if let Some(dominant) = s.dominant_phase() {
+        println!("phases    {} (mostly {})", s.phases.len(), dominant.label());
+        for (kind, n, secs) in s.phase_rollup() {
+            println!(
+                "            {n:>4}  {:<13} {}",
+                kind.label(),
+                fmt::duration(secs)
+            );
+        }
+    }
     println!(
         "turns     {} assistant, {} user prompts",
         s.assistant_turns, s.user_prompts

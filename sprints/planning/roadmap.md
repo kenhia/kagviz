@@ -24,6 +24,15 @@ model is used only to write the headline over facts already established.**
   than its peer, and the layout uses a wide monitor. Swept over 197
   transcripts. See `sprints/002-phases-and-wide-report.md`.
 
+- **Sprint 003 — close the undercount.** An adapter table keyed by tool name,
+  so an MCP file server's own unified diff is recovered instead of being
+  invisible, and the subagent rollup: `subagents/agent-*.jsonl` folded in as a
+  separate `delegation` tier with an explicit combined line. The facts grew
+  `changes.by_tool` and `delegation`. Swept 199 transcripts: zero skipped
+  lines, and the only values that moved were the three sessions holding kaed
+  edits. The git-diff reconciliation was rejected rather than attempted — see
+  the sprint record for why. See `sprints/003-close-the-undercount.md`.
+
 ## Now
 
 - **The headline pass.** Optional LLM labels for segments and a
@@ -32,11 +41,12 @@ model is used only to write the headline over facts already established.**
 
 ## Next
 
-- **Per-tool diff adapters.** Close the `opaque_edits` gap where possible —
-  kaed edit results carry their own diffs, and a `git diff --stat` over the
-  session window can reconcile shell edits.
-- **Subagent rollup.** Fold `subagents/agent-*.jsonl` into the parent session's
-  facts, so delegated work shows up as work rather than as a single tool call.
+- **Reconcile shell edits, honestly or not at all.** The `opaque_edits` gap is
+  now the *only* undercount left, and it is the hard one: nothing in the
+  transcript bytes can see a `sed -i`. Two separable pieces — narrow
+  `opaque_edits` to shell calls that plausibly wrote (deterministic, from the
+  command string), and a `git diff` figure that would have to be a separately
+  named, clearly *inferred* field.
 
 ## Later / Ideas
 

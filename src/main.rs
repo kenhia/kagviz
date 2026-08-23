@@ -14,6 +14,7 @@ use clap::{Parser, Subcommand};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use summary::Summary;
+use transcript::{Subagent, Transcript};
 
 #[derive(Parser)]
 #[command(
@@ -89,8 +90,8 @@ fn list_sessions(root: &Path, project: Option<&str>) -> Result<()> {
         "SESSION", "PROJECT", "ACTIVE", "TOOLS", "FAIL"
     );
     for session in &sessions {
-        let t = transcript::read(&session.transcript)?;
-        let s = summary::summarize(Some(session), &t);
+        let (t, subagents) = read_session(session)?;
+        let s = summary::summarize(Some(session), &t, &subagents);
         println!(
             "{:<38} {:<22} {:>7} {:>7} {:>6}",
             session.id,
@@ -104,14 +105,28 @@ fn list_sessions(root: &Path, project: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Read a session's transcript and every subagent sidecar beside it.
+///
+/// The sidecars are read here, at the edge, so `summarize` stays a pure
+/// function of bytes handed to it rather than of what happens to be on disk.
+fn read_session(session: &discover::SessionPaths) -> Result<(Transcript, Vec<Subagent>)> {
+    let t = transcript::read(&session.transcript)?;
+    let subagents = session
+        .subagents
+        .iter()
+        .map(|p| transcript::read_subagent(p))
+        .collect::<Result<Vec<_>>>()?;
+    Ok((t, subagents))
+}
+
 /// Summarize one session from its transcript on disk.
 fn load_session(root: &Path, id: &str) -> Result<Summary> {
     let session = discover::sessions(root, None)?
         .into_iter()
         .find(|s| s.id == id)
         .with_context(|| format!("no session {id} under {}", root.display()))?;
-    let t = transcript::read(&session.transcript)?;
-    Ok(summary::summarize(Some(&session), &t))
+    let (t, subagents) = read_session(&session)?;
+    Ok(summary::summarize(Some(&session), &t, &subagents))
 }
 
 /// Read a facts document written by `show --json` (`-` reads stdin).
@@ -208,12 +223,30 @@ fn show_session(root: &Path, id: &str, json: bool) -> Result<()> {
         println!("            {n:>4}  {name}{note}");
     }
     println!(
-        "files     {} touched, +{}/-{}  [{} opaque shell call(s) unaccounted]",
+        "files     {} touched, +{}/-{}  [{} opaque call(s) unaccounted]",
         s.changes.files_touched,
         s.changes.lines_added,
         s.changes.lines_deleted,
         s.changes.opaque_edits
     );
+    for (tool, c) in &s.changes.by_tool {
+        let seen = if c.opaque == c.calls {
+            format!("{} unreadable", c.opaque)
+        } else {
+            format!(
+                "{} file(s) +{}/-{}{}",
+                c.files_touched,
+                c.lines_added,
+                c.lines_deleted,
+                if c.opaque > 0 {
+                    format!(", {} unreadable", c.opaque)
+                } else {
+                    String::new()
+                }
+            )
+        };
+        println!("            {:>4}  {tool}  ({seen})", c.calls);
+    }
     println!(
         "tokens    {} out ({} thinking), {} cache read",
         s.tokens.output, s.tokens.thinking, s.tokens.cache_read
@@ -234,6 +267,7 @@ fn show_session(root: &Path, id: &str, json: bool) -> Result<()> {
             s.subagent_transcripts
         );
     }
+    print_delegation(&s);
     if s.skipped_lines > 0 {
         eprintln!(
             "\nwarning: {} line(s) did not parse; counts are partial",
@@ -241,6 +275,52 @@ fn show_session(root: &Path, id: &str, json: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Delegated work as its own tier, with the combined line spelled out.
+///
+/// The combined figures are the point of printing this at all: a session that
+/// spawned two agents shows two `Agent` calls in the tool list above, and the
+/// real cost is down here.
+fn print_delegation(s: &Summary) {
+    let d = &s.delegation;
+    if d.is_empty() {
+        return;
+    }
+    println!(
+        "delegated {} agent(s), {} tool call(s), {} out",
+        d.spawns.len(),
+        d.totals.tool_calls.values().sum::<u32>(),
+        fmt::count(d.totals.tokens.output),
+    );
+    for spawn in &d.spawns {
+        println!(
+            "            {:<10} {:>4} call(s)  {:>7}  {:>8} out  {}",
+            spawn.subagent_type.as_deref().unwrap_or("agent"),
+            spawn.tool_calls.values().sum::<u32>(),
+            fmt::duration(spawn.active_secs),
+            fmt::count(spawn.tokens.output),
+            spawn.description.as_deref().unwrap_or(""),
+        );
+    }
+    if d.unjoined_spawns > 0 {
+        println!(
+            "            {} spawn(s) have no transcript; their work is not counted here",
+            d.unjoined_spawns
+        );
+    }
+    if d.inline_records > 0 {
+        println!(
+            "            {} record(s) were subagent turns inlined in this transcript",
+            d.inline_records
+        );
+    }
+    println!(
+        "combined  {} tool call(s), {} failed, {} out  (session + delegated)",
+        s.combined_tool_calls(),
+        s.combined_tool_failures(),
+        fmt::count(s.combined_output_tokens()),
+    );
 }
 
 fn sorted(set: &std::collections::BTreeSet<String>) -> Vec<String> {

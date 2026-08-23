@@ -32,6 +32,23 @@ const MAX_BUCKETS: usize = 240;
 /// How much of a user turn is carried as its label.
 const PREVIEW_CHARS: usize = 80;
 
+/// Share of a phase's tool calls, as a percentage, at which each label fires.
+///
+/// These live here rather than in the renderer for the same reason
+/// [`BUCKET_LADDER`] does: two renderings of one session must not disagree
+/// about what a phase was. They are integers, and the comparison is integer
+/// arithmetic, so the classification cannot drift with a platform's floats.
+///
+/// The order they are tested in is part of the rule and lives in
+/// [`classify_phase`]. Editing is deliberately the cheapest label to earn: a
+/// change is almost always preceded by a lot of reading, so a phase that reads
+/// twenty files and edits two is implementing, not exploring.
+const IMPLEMENTING_EDIT_PCT: u32 = 15;
+const FILING_ORG_PCT: u32 = 40;
+const EXPLORING_READ_PCT: u32 = 50;
+const RUNNING_RUN_PCT: u32 = 50;
+const DELEGATING_PCT: u32 = 34;
+
 #[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct TokenTotals {
@@ -116,6 +133,186 @@ impl Activity {
     }
 }
 
+/// What a tool call was *for*, coarsely enough to be stable.
+///
+/// The point of this classification is to survive a tool being renamed or an
+/// MCP server being added: it is a small table plus one rule for MCP names,
+/// not an inventory. A tool nobody has taught it about lands in `Other`, which
+/// dilutes every share equally rather than distorting one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolClass {
+    Read,
+    Edit,
+    Run,
+    /// Systems of record — issue trackers, memory stores, mail. Reading and
+    /// writing one are the same activity from the session's point of view:
+    /// the work is filing, not coding.
+    Org,
+    Ask,
+    Delegate,
+    Other,
+}
+
+/// MCP operations that act on *files* rather than on an external system.
+///
+/// Matched on the operation exactly, never as a prefix, which is what keeps
+/// `read` (a file server) apart from `read_report` (a tracker) — and why
+/// `list_work_items` does not look like `list`.
+const MCP_FILE_READ_OPS: &[&str] = &["read", "search", "list", "stat", "diff", "journal", "roots"];
+const MCP_FILE_EDIT_OPS: &[&str] = &["edit", "write", "revert"];
+
+fn classify_tool(name: &str) -> ToolClass {
+    if let Some(rest) = name.strip_prefix("mcp__") {
+        let op = rest.rsplit("__").next().unwrap_or(rest);
+        return if MCP_FILE_READ_OPS.contains(&op) {
+            ToolClass::Read
+        } else if MCP_FILE_EDIT_OPS.contains(&op) {
+            ToolClass::Edit
+        } else {
+            ToolClass::Org
+        };
+    }
+    match name {
+        "Read"
+        | "Glob"
+        | "Grep"
+        | "LS"
+        | "NotebookRead"
+        | "WebFetch"
+        | "WebSearch"
+        | "ListMcpResourcesTool"
+        | "ReadMcpResourceTool"
+        | "ReadMcpResourceDirTool" => ToolClass::Read,
+        "Edit" | "MultiEdit" | "Write" | "NotebookEdit" => ToolClass::Edit,
+        "Bash" | "PowerShell" | "BashOutput" | "KillShell" | "KillBash" | "Monitor" => {
+            ToolClass::Run
+        }
+        "AskUserQuestion" => ToolClass::Ask,
+        "Agent" | "Task" | "Skill" | "Workflow" | "SendMessage" => ToolClass::Delegate,
+        _ => ToolClass::Other,
+    }
+}
+
+/// The tool mix a phase's label was computed from, carried alongside the label
+/// so the label can be checked rather than believed.
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ToolMix {
+    pub read: u32,
+    pub edit: u32,
+    pub run: u32,
+    pub org: u32,
+    pub ask: u32,
+    pub delegate: u32,
+    pub other: u32,
+}
+
+impl ToolMix {
+    fn add(&mut self, class: ToolClass) {
+        let slot = match class {
+            ToolClass::Read => &mut self.read,
+            ToolClass::Edit => &mut self.edit,
+            ToolClass::Run => &mut self.run,
+            ToolClass::Org => &mut self.org,
+            ToolClass::Ask => &mut self.ask,
+            ToolClass::Delegate => &mut self.delegate,
+            ToolClass::Other => &mut self.other,
+        };
+        *slot += 1;
+    }
+
+    fn absorb(&mut self, other: &ToolMix) {
+        self.read += other.read;
+        self.edit += other.edit;
+        self.run += other.run;
+        self.org += other.org;
+        self.ask += other.ask;
+        self.delegate += other.delegate;
+        self.other += other.other;
+    }
+
+    pub fn total(&self) -> u32 {
+        self.read + self.edit + self.run + self.org + self.ask + self.delegate + self.other
+    }
+
+    /// The named parts, largest first, for a renderer that wants to show the
+    /// mix without knowing the field names.
+    pub fn parts(&self) -> Vec<(&'static str, u32)> {
+        let mut parts = vec![
+            ("read", self.read),
+            ("edit", self.edit),
+            ("run", self.run),
+            ("org", self.org),
+            ("ask", self.ask),
+            ("delegate", self.delegate),
+            ("other", self.other),
+        ];
+        parts.retain(|(_, n)| *n > 0);
+        parts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        parts
+    }
+}
+
+/// What a phase was, named mechanically.
+///
+/// These name a *tool mix*, not an intent. `implementing` means "files were
+/// edited here", not "this is where the feature was built"; `running` means
+/// "mostly shell", which under agent instructions that prefer shell editing
+/// may well be editing kagviz cannot see. A descriptive label is a later,
+/// separate field written by a model over these facts — it will never
+/// overwrite one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PhaseKind {
+    Exploring,
+    Implementing,
+    Running,
+    Filing,
+    Delegating,
+    Discussing,
+    Mixed,
+}
+
+impl PhaseKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            PhaseKind::Exploring => "exploring",
+            PhaseKind::Implementing => "implementing",
+            PhaseKind::Running => "running",
+            PhaseKind::Filing => "filing",
+            PhaseKind::Delegating => "delegating",
+            PhaseKind::Discussing => "discussing",
+            PhaseKind::Mixed => "mixed",
+        }
+    }
+}
+
+/// One stretch of work between two user turns.
+///
+/// Phases are cut at every user turn **and** at every idle break, so a phase
+/// never spans a gap: `span` names the [`ActivitySpan`] it lies inside, and
+/// `secs` is time actually worked. Cutting only at user turns would let one
+/// phase quietly contain a three-day pause and report it as duration, which is
+/// the wall-clock lie one level up.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Phase {
+    pub started: DateTime<Utc>,
+    pub ended: DateTime<Utc>,
+    pub secs: i64,
+    /// Index into `activity.spans`. A phase lies wholly within one span.
+    pub span: usize,
+    pub kind: PhaseKind,
+    pub records: u32,
+    pub tool_calls: u32,
+    pub tool_failures: u32,
+    pub output_tokens: u64,
+    /// The counts [`PhaseKind`] was derived from.
+    pub mix: ToolMix,
+    /// Preview of the user turn that opened this phase. Absent when the phase
+    /// opens a resumed span instead — work picked up again with nothing said.
+    pub opened_by: Option<String>,
+}
+
 /// A moment where the user was in the loop rather than watching.
 ///
 /// These are the decision points of a session, and they are the one thing a
@@ -187,6 +384,9 @@ pub struct Summary {
     /// Work over time, idle removed. Additive to the facts contract: the
     /// totals above stay exactly what they were.
     pub activity: Activity,
+    /// The session cut into phases and labelled by tool mix. Additive: it is
+    /// derived from the same event stream `activity` is, and moves nothing.
+    pub phases: Vec<Phase>,
     /// Every moment the user was involved, in transcript order.
     pub user_involvement: Vec<Involvement>,
 }
@@ -198,6 +398,25 @@ impl Summary {
 
     pub fn total_tool_failures(&self) -> u32 {
         self.tool_failures.values().sum()
+    }
+
+    /// Phase kinds by time spent, largest first: `(kind, phases, secs)`.
+    pub fn phase_rollup(&self) -> Vec<(PhaseKind, usize, i64)> {
+        let mut by: BTreeMap<PhaseKind, (usize, i64)> = BTreeMap::new();
+        for p in &self.phases {
+            let slot = by.entry(p.kind).or_default();
+            slot.0 += 1;
+            slot.1 += p.secs;
+        }
+        let mut rows: Vec<(PhaseKind, usize, i64)> =
+            by.into_iter().map(|(k, (n, secs))| (k, n, secs)).collect();
+        rows.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)).then(a.0.cmp(&b.0)));
+        rows
+    }
+
+    /// The kind that holds the most time, for a one-word headline.
+    pub fn dominant_phase(&self) -> Option<PhaseKind> {
+        self.phase_rollup().first().map(|(kind, _, _)| *kind)
     }
 }
 
@@ -272,6 +491,7 @@ pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summa
                 };
                 *s.tool_calls.entry(name.clone()).or_default() += 1;
                 event.tool_calls += 1;
+                event.mix.add(classify_tool(&name));
                 if let Some(id) = &block.id {
                     tool_names.insert(id.clone(), name.clone());
                 }
@@ -308,6 +528,7 @@ pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summa
                 s.user_prompts += 1;
                 event.user_turns += 1;
                 let (preview, truncated) = preview_of(&msg.content);
+                event.user_preview = Some(preview.clone());
                 s.user_involvement.push(Involvement::Prompt {
                     at,
                     preview,
@@ -380,29 +601,42 @@ pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summa
     // Records are appended in order, but a transcript that merged two writers
     // need not be sorted; the series is built from time, not from file order.
     events.sort_by_key(|e| e.at);
-    s.activity = build_activity(&events);
+    // Spans and phases are two cuts of the same event stream, so the idle
+    // split is computed once and shared: a phase boundary that disagreed with
+    // a span boundary would put a phase across a gap the strip has collapsed.
+    let times: Vec<DateTime<Utc>> = events.iter().filter_map(|e| e.at).collect();
+    let ranges = split_spans(&times);
+    s.activity = build_activity(&events, &times, &ranges);
+    s.phases = build_phases(&events, &times, &ranges);
 
     s
 }
 
-/// One record's contribution to the activity series.
-#[derive(Debug, Default, Clone, Copy)]
+/// One record's contribution to the activity series and the phase cut.
+#[derive(Debug, Default, Clone)]
 struct Event {
     at: Option<DateTime<Utc>>,
     tool_calls: u32,
     tool_failures: u32,
     user_turns: u32,
     output_tokens: u64,
+    /// How this record's tool calls classified. Buckets never see it —
+    /// a label in a bucket would be the wrong layer — but phases are cut and
+    /// named from it.
+    mix: ToolMix,
+    /// Set only on a real user turn: the preview that opens a phase.
+    user_preview: Option<String>,
 }
 
-/// Cut the event stream at idle gaps and bucket each resulting span.
-fn build_activity(events: &[Event]) -> Activity {
-    let times: Vec<DateTime<Utc>> = events.iter().filter_map(|e| e.at).collect();
+/// Inclusive index ranges of continuous work, cut wherever a gap reaches
+/// [`IDLE_GAP_SECS`].
+///
+/// The single definition of "a stretch of work": both the activity strip and
+/// the phase cut are built from what this returns.
+fn split_spans(times: &[DateTime<Utc>]) -> Vec<(usize, usize)> {
     if times.is_empty() {
-        return Activity::default();
+        return Vec::new();
     }
-
-    // Inclusive index ranges of continuous work.
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     let mut start = 0;
     for i in 1..times.len() {
@@ -412,12 +646,24 @@ fn build_activity(events: &[Event]) -> Activity {
         }
     }
     ranges.push((start, times.len() - 1));
+    ranges
+}
 
-    let bucket_secs = choose_bucket_secs(&times, &ranges);
+/// Bucket each span of the event stream at a width chosen for the session.
+fn build_activity(
+    events: &[Event],
+    times: &[DateTime<Utc>],
+    ranges: &[(usize, usize)],
+) -> Activity {
+    if times.is_empty() {
+        return Activity::default();
+    }
+
+    let bucket_secs = choose_bucket_secs(times, ranges);
     let mut spans = Vec::with_capacity(ranges.len());
     let mut prev_end: Option<DateTime<Utc>> = None;
 
-    for (a, b) in ranges {
+    for &(a, b) in ranges {
         let (started, ended) = (times[a], times[b]);
         let secs = (ended - started).num_seconds();
         let count = bucket_count(secs, bucket_secs);
@@ -442,6 +688,113 @@ fn build_activity(events: &[Event]) -> Activity {
     }
 
     Activity { bucket_secs, spans }
+}
+
+/// Cut each span at its user turns and label the pieces by tool mix.
+///
+/// Two cuts, both deliberate. **User turns** because that is where the work
+/// was redirected — the boundary a reader already recognises. **Span
+/// boundaries** because a phase that ran across an idle gap would report a
+/// three-day pause as its own duration, and `secs` here has to mean time
+/// worked. So a phase that resumes after a break is a new phase, with
+/// `opened_by` absent to say nobody asked for it.
+///
+/// A phase runs until the next one *starts*, not until its own last record.
+/// The 40 seconds between an agent's last tool call and the user's next turn
+/// are real work time, and giving them to neither phase would make the phase
+/// durations quietly fail to add up to active time — a shortfall a reader
+/// would have no way to see. Phases therefore tile their span exactly.
+fn build_phases(
+    events: &[Event],
+    times: &[DateTime<Utc>],
+    ranges: &[(usize, usize)],
+) -> Vec<Phase> {
+    let mut phases = Vec::new();
+    for (span, &(a, b)) in ranges.iter().enumerate() {
+        let mut cuts = vec![a];
+        cuts.extend(((a + 1)..=b).filter(|&i| events[i].user_turns > 0));
+        for (k, &start) in cuts.iter().enumerate() {
+            let (last, ends_at) = match cuts.get(k + 1) {
+                Some(&next) => (next - 1, times[next]),
+                None => (b, times[b]),
+            };
+            phases.push(phase_from(
+                events, times, span, times[a], start, last, ends_at,
+            ));
+        }
+    }
+    phases
+}
+
+fn phase_from(
+    events: &[Event],
+    times: &[DateTime<Utc>],
+    span: usize,
+    span_started: DateTime<Utc>,
+    a: usize,
+    b: usize,
+    ends_at: DateTime<Utc>,
+) -> Phase {
+    let mut mix = ToolMix::default();
+    let mut tool_calls = 0;
+    let mut tool_failures = 0;
+    let mut output_tokens = 0;
+    for e in &events[a..=b] {
+        tool_calls += e.tool_calls;
+        tool_failures += e.tool_failures;
+        output_tokens += e.output_tokens;
+        mix.absorb(&e.mix);
+    }
+    let started = times[a];
+    // Both ends measured as whole-second offsets from the span, then
+    // subtracted, so the truncations telescope and the phases in a span sum to
+    // exactly the span's own length. Truncating each phase's own duration
+    // instead loses up to a second per phase — under a second each, but three
+    // seconds a span and minutes across a session with two hundred of them,
+    // and a shortfall that size is invisible to a reader.
+    let from = (started - span_started).num_seconds();
+    let to = (ends_at - span_started).num_seconds();
+    Phase {
+        started,
+        ended: ends_at,
+        secs: to - from,
+        span,
+        kind: classify_phase(&mix),
+        records: (b - a + 1) as u32,
+        tool_calls,
+        tool_failures,
+        output_tokens,
+        mix,
+        opened_by: events[a].user_preview.clone(),
+    }
+}
+
+/// Name a phase from its tool mix. First rule that fires wins, and the order
+/// is the rule — see the threshold constants for why editing is tested early.
+///
+/// Deliberately dumb. A segmentation that moves between runs is worth less
+/// than a slightly coarse one that does not, and there is no way to test the
+/// clever version for the property that actually matters.
+fn classify_phase(mix: &ToolMix) -> PhaseKind {
+    let total = mix.total();
+    if total == 0 {
+        return PhaseKind::Discussing;
+    }
+    // Integer comparison, so the label cannot depend on a platform's floats.
+    let at_least = |n: u32, pct: u32| u64::from(n) * 100 >= u64::from(total) * u64::from(pct);
+    if at_least(mix.delegate, DELEGATING_PCT) {
+        PhaseKind::Delegating
+    } else if at_least(mix.edit, IMPLEMENTING_EDIT_PCT) {
+        PhaseKind::Implementing
+    } else if at_least(mix.org, FILING_ORG_PCT) {
+        PhaseKind::Filing
+    } else if at_least(mix.read, EXPLORING_READ_PCT) {
+        PhaseKind::Exploring
+    } else if at_least(mix.run, RUNNING_RUN_PCT) {
+        PhaseKind::Running
+    } else {
+        PhaseKind::Mixed
+    }
 }
 
 fn bucket_count(span_secs: i64, bucket_secs: i64) -> usize {
@@ -661,6 +1014,202 @@ mod tests {
                 .collect(),
             skipped: 0,
         }
+    }
+
+    /// The cut rule, both halves of it. Two user turns inside one stretch of
+    /// work make two phases; an idle gap makes a third, even though nobody
+    /// said anything to start it.
+    #[test]
+    fn phases_are_cut_at_user_turns_and_never_span_an_idle_gap() {
+        let t = transcript(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "content":"explore the extractor"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:20.000Z","message":{
+                "content":[{"type":"tool_use","id":"t1","name":"Read"}]}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:01:00.000Z","message":{
+                "content":"now fix it"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:01:30.000Z","message":{
+                "content":[{"type":"tool_use","id":"t2","name":"Edit"}]}}"#,
+            // two hours later: same task, but a new span and so a new phase
+            r#"{"type":"assistant","timestamp":"2026-08-20T12:01:30.000Z","message":{
+                "content":[{"type":"tool_use","id":"t3","name":"Bash"}]}}"#,
+        ]);
+        let s = summarize(None, &t);
+        assert_eq!(s.phases.len(), 3);
+        assert_eq!(s.activity.spans.len(), 2);
+
+        assert_eq!(s.phases[0].span, 0);
+        assert_eq!(
+            s.phases[0].opened_by.as_deref(),
+            Some("explore the extractor")
+        );
+        assert_eq!(s.phases[0].kind, PhaseKind::Exploring);
+
+        assert_eq!(s.phases[1].span, 0);
+        assert_eq!(s.phases[1].opened_by.as_deref(), Some("now fix it"));
+        assert_eq!(s.phases[1].kind, PhaseKind::Implementing);
+
+        // The resumed phase: nobody opened it, and its duration is work only.
+        assert_eq!(s.phases[2].span, 1);
+        assert_eq!(s.phases[2].opened_by, None);
+        assert_eq!(s.phases[2].secs, 0);
+
+        // No phase swallowed the two-hour gap, and between them the phases
+        // account for every second of active time — no unattributed remainder.
+        assert!(s.phases.iter().all(|p| p.secs < IDLE_GAP_SECS));
+        assert_eq!(
+            s.phases.iter().map(|p| p.secs).sum::<i64>(),
+            s.activity.spans.iter().map(|sp| sp.secs).sum::<i64>()
+        );
+        // The first phase runs up to the moment the user redirected it, not
+        // up to its own last tool call.
+        assert_eq!(s.phases[0].secs, 60);
+        assert_eq!(s.phases[0].ended, s.phases[1].started);
+    }
+
+    /// Real timestamps carry milliseconds, and truncating each phase's own
+    /// duration lost up to a second per phase — three seconds a span, and
+    /// minutes across the 209-span session in the corpus. Found by the sweep,
+    /// not by a unit test, which is why this one exists.
+    #[test]
+    fn sub_second_timestamps_do_not_leak_time_out_of_a_span() {
+        let t = transcript(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.900Z","message":{
+                "content":"a"}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:10.800Z","message":{
+                "content":"b"}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:20.700Z","message":{
+                "content":"c"}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:30.600Z","message":{
+                "content":"d"}}"#,
+        ]);
+        let s = summarize(None, &t);
+        assert_eq!(s.phases.len(), 4);
+        assert_eq!(s.activity.spans.len(), 1);
+        assert_eq!(
+            s.phases.iter().map(|p| p.secs).sum::<i64>(),
+            s.activity.spans[0].secs,
+            "phases must tile their span exactly, milliseconds and all"
+        );
+    }
+
+    /// Editing is a strong signal at a low share: a phase that reads a lot and
+    /// edits twice is implementing, because that is what implementing looks
+    /// like. Reading with no edit at all is exploring.
+    #[test]
+    fn a_phase_is_named_by_its_tool_mix_not_by_its_biggest_count() {
+        let reads = |n: usize| {
+            (0..n)
+                .map(|_| {
+                    r#"{"type":"assistant","timestamp":"2026-08-20T10:00:20.000Z","message":{
+                        "content":[{"type":"tool_use","name":"Read"}]}}"#
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut lines = reads(9);
+        let s = summarize(None, &transcript(&lines));
+        assert_eq!(s.phases[0].kind, PhaseKind::Exploring);
+        assert_eq!(s.phases[0].mix.read, 9);
+
+        let edit = r#"{"type":"assistant","timestamp":"2026-08-20T10:00:20.000Z","message":{
+                "content":[{"type":"tool_use","name":"Edit"}]}}"#;
+
+        lines.push(edit);
+        let s = summarize(None, &transcript(&lines));
+        assert_eq!(s.phases[0].mix.edit, 1);
+        assert_eq!(
+            s.phases[0].kind,
+            PhaseKind::Exploring,
+            "1 edit in 10 is 10%, under the 15% bar"
+        );
+
+        lines.push(edit);
+        let s = summarize(None, &transcript(&lines));
+        assert_eq!(
+            s.phases[0].kind,
+            PhaseKind::Implementing,
+            "2 edits in 11 is 18%, over it"
+        );
+    }
+
+    /// A phase with no tool calls at all is the agent talking, and saying so
+    /// is better than calling it `mixed`.
+    #[test]
+    fn a_phase_with_no_tool_calls_is_discussing() {
+        let t = transcript(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "content":"what does this do?"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:20.000Z","message":{
+                "content":[{"type":"text","text":"it counts records"}]}}"#,
+        ]);
+        let s = summarize(None, &t);
+        assert_eq!(s.phases.len(), 1);
+        assert_eq!(s.phases[0].kind, PhaseKind::Discussing);
+        assert_eq!(s.phases[0].mix.total(), 0);
+    }
+
+    /// MCP tools are classified by their *operation*, so a file server and a
+    /// tracker on the same protocol do not read as the same activity. The
+    /// match is exact: `list_work_items` is not `list`.
+    #[test]
+    fn mcp_tools_are_classified_by_operation_not_by_server() {
+        assert_eq!(classify_tool("mcp__kaed-kai__read"), ToolClass::Read);
+        assert_eq!(classify_tool("mcp__kaed-kai__edit"), ToolClass::Edit);
+        assert_eq!(classify_tool("mcp__korg__list_work_items"), ToolClass::Org);
+        assert_eq!(classify_tool("mcp__korg__create_work_item"), ToolClass::Org);
+        assert_eq!(classify_tool("mcp__klams__memory_search"), ToolClass::Org);
+        // Nothing unknown is silently a read; it dilutes, it does not distort.
+        assert_eq!(classify_tool("SomeToolNobodyTaughtUs"), ToolClass::Other);
+    }
+
+    #[test]
+    fn a_tracker_heavy_phase_is_filing() {
+        let t = transcript(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "content":"file the follow-ups"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:20.000Z","message":{
+                "content":[
+                    {"type":"tool_use","name":"mcp__korg__create_work_item"},
+                    {"type":"tool_use","name":"mcp__korg__create_work_item"},
+                    {"type":"tool_use","name":"mcp__korg__update_proposal"},
+                    {"type":"tool_use","name":"Read"}]}}"#,
+        ]);
+        let s = summarize(None, &t);
+        assert_eq!(s.phases[0].kind, PhaseKind::Filing);
+        assert_eq!(s.phases[0].mix.org, 3);
+        assert_eq!(s.phases[0].mix.read, 1);
+    }
+
+    /// The rollup is what the headline reads, so it has to order by time
+    /// spent rather than by phase count.
+    #[test]
+    fn the_phase_rollup_orders_by_time_not_by_count() {
+        let t = transcript(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "content":"a"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:01:00.000Z","message":{
+                "content":[{"type":"tool_use","name":"Edit"}]}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:01:10.000Z","message":{
+                "content":"b"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:01:15.000Z","message":{
+                "content":[{"type":"tool_use","name":"Read"}]}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:01:20.000Z","message":{
+                "content":"c"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:01:25.000Z","message":{
+                "content":[{"type":"tool_use","name":"Read"}]}}"#,
+        ]);
+        let s = summarize(None, &t);
+        let rollup = s.phase_rollup();
+        // one implementing phase (70s, up to the next user turn) against two
+        // exploring phases (10s and 5s)
+        assert_eq!(rollup[0], (PhaseKind::Implementing, 1, 70));
+        assert_eq!(rollup[1], (PhaseKind::Exploring, 2, 15));
+        assert_eq!(
+            rollup.iter().map(|(_, _, secs)| secs).sum::<i64>(),
+            s.activity.spans.iter().map(|sp| sp.secs).sum::<i64>()
+        );
+        assert_eq!(s.dominant_phase(), Some(PhaseKind::Implementing));
     }
 
     #[test]

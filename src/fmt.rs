@@ -4,16 +4,26 @@
 //! reads. Both the terminal output and the HTML report go through it so a
 //! duration never renders two different ways.
 
-/// A duration as `42s`, `7m`, or `3h05m`.
+/// A duration as `42s`, `7m`, `3h05m`, or `54d01h`.
+///
+/// The day rung exists because resumed sessions are the normal case, not the
+/// exotic one: the hardest session in the corpus spans 54 days, and rendering
+/// that as `1297h15m` asks the reader to do the division. That number sits in
+/// the headline precisely so wall clock stays legible next to active time —
+/// unreadable would defeat the point of putting it there.
 pub fn duration(secs: i64) -> String {
     if secs < 60 {
         return format!("{secs}s");
     }
     let mins = secs / 60;
     if mins < 60 {
-        format!("{mins}m")
+        return format!("{mins}m");
+    }
+    let hours = mins / 60;
+    if hours < 24 {
+        format!("{hours}h{:02}m", mins % 60)
     } else {
-        format!("{}h{:02}m", mins / 60, mins % 60)
+        format!("{}d{:02}h", hours / 24, hours % 24)
     }
 }
 
@@ -42,6 +52,10 @@ mod tests {
         assert_eq!(duration(3599), "59m");
         assert_eq!(duration(3600), "1h00m");
         assert_eq!(duration(11100), "3h05m");
+        assert_eq!(duration(86_399), "23h59m");
+        assert_eq!(duration(86_400), "1d00h");
+        // The corpus's worst case: 54 days, not 1297 hours.
+        assert_eq!(duration(4_669_200), "54d01h");
     }
 
     #[test]

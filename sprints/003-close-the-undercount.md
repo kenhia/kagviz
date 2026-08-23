@@ -20,17 +20,20 @@ invisible?**
 
 ## The answer, given once
 
-Every file-change quantity is **sourced**, and a source is in exactly one of
-two states:
+Every file-change **quantity** is in exactly one of two states:
 
-1. **Recovered** — an exact number, read out of a diff the transcript
-   actually carries. Contributes to `lines_added` / `lines_deleted` /
-   `files_touched`.
-2. **Unrecovered** — a call that could have changed a file and exposed
-   nothing readable. Counted in `opaque_edits`, never folded into the deltas.
+1. **Recovered** — an exact number, read out of what the transcript actually
+   carries. Contributes to `lines_added` / `lines_deleted` / `files_touched`.
+2. **Unrecovered** — could have changed and exposed nothing readable. Counted
+   in `opaque_edits`, never folded into the deltas.
 
 There is no third state in the shipped facts. **Inferred numbers are not
 shipped** — see "What we rejected".
+
+The word doing the work there is *quantity*, not *call*, and the distinction is
+not pedantic: one call can be recovered in one quantity and unrecovered in
+another. We got this wrong on the first pass and the corpus caught it — see
+"The defect only cleo could find".
 
 `changes.by_tool` is the audit surface that makes this checkable rather than
 believed: per tool, how many edit-capable calls there were, what was recovered
@@ -44,8 +47,10 @@ the parent hides the number a reader most wants to see.
 
 ## What the corpus taught us
 
-Swept 199 transcripts on kai. (The cleo corpus is not reachable from this
-host; anything below that depends on Windows-only shapes is called out.)
+Swept 199 transcripts on kai first, then — once the extractor was written —
+pinned and swept **all three hosts**: 405 transcripts, 568 MB, zero parse
+failures, zero skipped lines. See "The pinned corpora" below; the second sweep
+found a defect the first could not have.
 
 **`mcp__kaed-*__edit` returns its own unified diff.** `toolUseResult` is a
 *JSON string*, not an object:
@@ -77,14 +82,65 @@ spends the afternoon again.
 `sessionId`. One spawn in the corpus (`a3f518e638b914e3e`) ran **48 tool
 calls and 25k output tokens** while the parent reported a single `Agent` call.
 
-**No `isSidechain: true` records anywhere in the kai corpus.** The older
-inline format is real but not present here, so the code path that handles it
-is written from the format's shape and covered by unit tests, not by a corpus
-measurement. Said plainly rather than implied.
+**No `isSidechain: true` records on any host.** All three run CLI 2.1.176+,
+which is past the inline format. That path is written from the format's shape
+and held by unit tests, not by a measurement — now for a stated reason rather
+than for lack of looking.
 
-Thin corpus warning, stated rather than buried: only **3** `Agent` calls
-across **2** sessions on kai. The rollup's unit tests carry more weight than
-the sweep does for this half.
+The thin-corpus warning that was true of kai alone — 3 `Agent` calls across 2
+sessions — is why the other two hosts got pinned. kubs0 has **18** spawns
+across 9 sessions, and cleo has **152** kaed edit calls against kai's 7.
+
+### The defect only cleo could find
+
+16 kaed results on cleo are `{"applied":true,"files":[…]}` with **no `diff`
+key**: the edit landed and named its files exactly, and only the line counts
+are absent. The first implementation marked the whole call opaque and threw the
+file list away — under-reporting `files_touched` by 35 paths.
+
+The framing was right and the code did not follow it. The contract says *every
+file-change **quantity*** is recovered or unrecovered; the implementation
+decided that per **call**. They are not the same, and this shape is where they
+come apart: files recovered, lines not. `Recovered` now carries `lines_known`,
+so a result contributes its files and still charges `opaque_edits` for the
+lines it did not carry. `opaque` in `by_tool` therefore means "line counts
+unreadable", not "call unreadable" — a tool can show non-zero `opaque` beside
+an exact `files_touched`.
+
+Effect, measured across all three corpora: kai and kubs0 unchanged (neither has
+the shape), cleo `files_touched` 597 → 632 over 4 sessions, `opaque_edits`
+unchanged at 3,253 — those calls' lines were unknown before and still are.
+
+## The pinned corpora
+
+The live corpus prunes itself on roughly a 30-day window; a session vanished
+from under the first sweep *while it was running*. Several result shapes exist
+in one or two transcripts, so without a pinned copy the only real-world
+validation of an extractor path silently stops existing and nothing fails.
+
+`/ai-data/kagviz-data` now holds a verbatim snapshot per host plus the facts
+each produced at a known commit — inputs and outputs, because the corpus proves
+the extractor still parses and the baseline proves no number moved.
+
+| corpus | transcripts | spawns | kaed edits | size | CLI range |
+|---|---|---|---|---|---|
+| kai | 199 | 3 | 7 | 318 MB | 2.1.176–2.1.240 |
+| kubs0 | 93 | 18 | 14 | 133 MB | 2.1.201–2.1.240 |
+| cleo (Windows) | 113 | 10 | 152 | 117 MB | 2.1.209–2.1.238 |
+
+cleo carries the load for this sprint's work: three kaed server-name variants
+including `mcp__kaed__edit` with no host suffix, the only `PowerShell` traffic
+anywhere (152 calls), and the no-`diff` shape above. kubsdb has no
+`~/.claude/projects` and is not a source.
+
+Two other things now settled by measurement: the CLI range on disk is
+2.1.176–2.1.240, wider than `docs/transcript-format.md` claimed; and
+LF-even-on-Windows holds (20 cleo transcripts sampled, zero CRLF).
+
+The corpora are raw session content and stay on that volume. A repo fixture is
+wanted eventually — so someone else can reproduce these numbers exactly — but
+it must be a hand-minimised, reviewed extract, not a file copied off the
+volume. Not needed yet.
 
 ## What shipped
 
@@ -125,6 +181,10 @@ breaking, and it is in neither work item. Follow-up.
 ## Follow-ups
 
 - Git-diff reconciliation as an explicitly inferred, separately named field.
-- Narrow `opaque_edits` to shell calls that plausibly wrote.
-- Verify both new code paths against the cleo (Windows) corpus, including the
-  `isSidechain` inline shape which kai cannot exercise.
+- Narrow `opaque_edits` to shell calls that plausibly wrote. Now the largest
+  remaining undercount by a wide margin: 21,821 opaque calls across the three
+  corpora, most of which never touched a file.
+- Surface that `files_touched` is *also* a floor wherever shell calls ran. The
+  facts say so now; the report does not.
+- A hand-minimised, secret-cleaned fixture in the repo, so the corpus sweep is
+  reproducible by someone without access to `/ai-data`.

@@ -5,9 +5,12 @@ was established by inspecting real transcripts; nothing is from documentation.
 The format is undocumented and drifts between CLI releases, so treat this as a
 field guide with a date on it rather than a spec.
 
-_Last checked against CLI 2.1.209 – 2.1.238, August 2026, over 197 transcripts on
-kai (Linux) and 108 on cleo (Windows). Sprint 003 re-swept the 199 kai
-transcripts; the cleo half of that sweep has not been re-run._
+_Last checked 2026-08-23 against **405 transcripts** written by CLI 2.1.176 –
+2.1.240 (32 distinct versions): 199 on kai and 93 on kubs0 (Linux), 113 on cleo
+(Windows). Those three corpora are pinned under `/ai-data/kagviz-data`, with
+the facts each produced at a known commit; see its `README.md`. Earlier
+revisions of this file cited 2.1.209 – 2.1.238, which was the range checked,
+not the range on disk._
 
 ## Layout on disk
 
@@ -112,6 +115,14 @@ Parse the string, then read `diff` as a unified diff and `files[].path` for the
 files. `"applied": false` means the server refused the edit — a *known* zero,
 not an unknown, so it must not be counted as opaque. Note the paths are
 root-relative and may not even name a file on this host.
+
+**The two halves arrive independently.** 16 results in the cleo corpus are
+`{"applied":true,"files":[…]}` with **no `diff` key** — the edit landed and
+named its files exactly, and only the line counts are absent. Treating that as
+"unreadable" drops file paths the transcript is holding (35 of them, corpus
+-wide). Take the files, and still charge `opaque_edits` for the missing lines.
+No transcript on kai or kubs0 has this shape; it was found only because a
+Windows corpus was snapshotted.
 
 Counting a unified diff by `+`/`-` prefix is wrong: a deleted line whose own
 content is `--` arrives as `---` and gets eaten as a file header. Count only

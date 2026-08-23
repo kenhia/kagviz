@@ -78,7 +78,8 @@ Calls that could have changed files and left no recoverable diff. `lines_added`
 is a floor, not a total, and under agent instructions that prefer shell editing
 the shortfall is systematic rather than occasional.
 
-Three things land here, and nothing else does:
+Read it precisely: it counts calls whose **line deltas** are unknown, which is
+not the same as calls kagviz learned nothing from. Four things land here:
 
 - Every `Bash` / `PowerShell` call, counted from the call rather than from a
   result — an interrupted shell call leaves no result and is still an edit
@@ -87,6 +88,15 @@ Three things land here, and nothing else does:
 - A built-in editor (`Edit`, `Write`, `NotebookEdit`) whose result kagviz could
   not read **and which did not error**. A *failed* edit changed nothing and is
   a known zero; it is already visible in `tool_failures`.
+- A result that named its files but carried **no diff** — measured shape,
+  `{"applied":true,"files":[…]}` from a file server. Its files are exact and
+  are counted in `files_touched`; only its lines are missing. So a call can be
+  opaque here *and* have contributed to `files_touched`, and the two must be
+  read separately rather than as one verdict on the call.
+
+`files_touched` has its own floor, and it is not the same one. A `Bash` call
+that wrote a file leaves no path to count, so `files_touched` is also a lower
+bound wherever `opaque_edits` includes shell calls.
 
 #### `changes.by_tool`
 
@@ -102,9 +112,12 @@ The audit surface for the adapter table — the same argument `mix` makes for a
 phase's `kind`. Without it, "+340 −88, and 51 unseen" has to be taken on faith.
 
 `calls` is edit-capable calls of that tool; `opaque` is how many of them gave
-nothing readable. The two are disjoint from the line deltas: a call is either
-read or unread, never counted as both. Summing `by_tool` gives back
-`lines_added`, `lines_deleted` and `opaque_edits` exactly — there is a test.
+no readable **line counts**. Summing `by_tool` gives back `lines_added`,
+`lines_deleted` and `opaque_edits` exactly — there is a test.
+
+A tool can show a non-zero `opaque` *and* an exact `files_touched`: that is the
+files-without-a-diff case above, and it is the reason `opaque` is not simply
+"calls we could not read".
 
 `files_touched` does **not** sum, because it must not: two tools that edited
 the same file changed one file between them. Note also that a file is

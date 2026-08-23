@@ -94,8 +94,12 @@ pub struct FileChanges {
 
 /// One tool's contribution to the file-change picture.
 ///
-/// `opaque` and the line deltas are disjoint: a call is either read or unread,
-/// never counted as both. `calls` is their sum.
+/// `calls` is every edit-capable call of the tool. `opaque` counts those whose
+/// **line deltas** could not be read — which is not quite the same as learning
+/// nothing from them: a call that named its files but carried no diff is
+/// opaque here and still counted in `files_touched`. So `files_touched` can be
+/// exact on a tool whose `opaque` is non-zero, and the two must be read
+/// separately rather than as one verdict on the call.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ToolChanges {
@@ -1371,6 +1375,12 @@ fn parse_stamp(raw: &str) -> Option<DateTime<Utc>> {
 }
 
 /// A file change read out of one tool result.
+///
+/// The two halves are recovered *independently*, because the corpus contains
+/// results that carry one without the other: a file server can report
+/// `{"applied":true,"files":[…]}` with no `diff` at all, naming exactly which
+/// files it changed while saying nothing about how much. Collapsing that to
+/// "unreadable" throws away a fact the transcript actually holds.
 #[derive(Debug, Default)]
 struct Recovered {
     /// Files the tool said it changed, as *it* identified them. Absolute for
@@ -1379,6 +1389,12 @@ struct Recovered {
     files: Vec<String>,
     added: usize,
     deleted: usize,
+    /// Whether `added`/`deleted` are a reading or merely a default.
+    ///
+    /// `false` means the tool named its files but handed over no diff: the
+    /// files are exact and the line counts are unknown, so the call still owes
+    /// `opaque_edits` an entry even though it contributed to `files_touched`.
+    lines_known: bool,
 }
 
 /// The adapter table: which reader to try against a tool's result payload.
@@ -1427,7 +1443,10 @@ fn is_mcp_file_edit(tool: &str) -> bool {
 /// so its line count is the addition.
 fn from_structured_patch(result: &Value) -> Option<Recovered> {
     let patch = result.get("structuredPatch")?;
-    let mut out = Recovered::default();
+    let mut out = Recovered {
+        lines_known: true,
+        ..Recovered::default()
+    };
     if let Some(path) = result.get("filePath").and_then(Value::as_str) {
         out.files.push(path.to_string());
     }
@@ -1478,12 +1497,13 @@ fn from_diff_envelope(result: &Value) -> Option<Recovered> {
     // An edit the server refused changed nothing, and kagviz knows that
     // exactly. Reporting it as opaque would manufacture an unknown.
     if envelope.get("applied").and_then(Value::as_bool) == Some(false) {
-        return Some(Recovered::default());
+        return Some(Recovered {
+            lines_known: true,
+            ..Recovered::default()
+        });
     }
 
-    let diff = envelope.get("diff").and_then(Value::as_str)?;
-    let (added, deleted) = count_unified(diff);
-    let files = envelope
+    let files: Vec<String> = envelope
         .get("files")
         .and_then(Value::as_array)
         .map(|fs| {
@@ -1493,10 +1513,22 @@ fn from_diff_envelope(result: &Value) -> Option<Recovered> {
                 .collect()
         })
         .unwrap_or_default();
+
+    // Measured on the cleo corpus: 16 results are `{"applied":true,"files":[…]}`
+    // with no `diff` — the edit landed and named its files, and only the line
+    // counts are missing. Take the files; leave the lines visibly unknown.
+    let Some(diff) = envelope.get("diff").and_then(Value::as_str) else {
+        return (!files.is_empty()).then(|| Recovered {
+            files,
+            ..Recovered::default()
+        });
+    };
+    let (added, deleted) = count_unified(diff);
     Some(Recovered {
         files,
         added,
         deleted,
+        lines_known: true,
     })
 }
 
@@ -1567,6 +1599,13 @@ impl ChangeTally {
                 for f in rec.files {
                     seen.insert(f.clone());
                     self.files.insert(f);
+                }
+                // Files known, lines not: the call still owes `opaque_edits` an
+                // entry, or `lines_added` would read as a total when it is a
+                // floor. The two halves are tracked separately for exactly this.
+                if !rec.lines_known {
+                    slot.opaque += 1;
+                    self.changes.opaque_edits += 1;
                 }
             }
             None if edits_files(tool) && !failed => self.opaque(tool, 1),
@@ -1964,6 +2003,42 @@ mod tests {
         assert_eq!(s.changes.opaque_edits, 0);
         assert_eq!(s.changes.lines_added, 0);
         assert_eq!(s.changes.by_tool["mcp__kaed-kai__edit"].calls, 1);
+    }
+
+    /// Found in the cleo corpus, not by reasoning: 16 kaed results are
+    /// `{"applied":true,"files":[…]}` with **no `diff`**. The edit landed and
+    /// named its files exactly; only the line counts are missing.
+    ///
+    /// Both halves have to be reported honestly at once — take the files
+    /// (they are exact, and dropping them under-reported `files_touched` by 36
+    /// paths corpus-wide), and still charge `opaque_edits`, because otherwise
+    /// `lines_added` reads as a total when it is a floor.
+    #[test]
+    fn a_result_naming_files_without_a_diff_yields_files_and_an_unknown() {
+        let envelope = r#"{\"applied\":true,\"files\":[{\"path\":\"a.rs\"},{\"path\":\"b.rs\"}],\"txn_id\":101}"#;
+        let t = transcript(&[
+            r#"{"type":"assistant","message":{
+                "content":[{"type":"tool_use","id":"t1","name":"mcp__kaed-kai__edit"}]}}"#,
+            &format!(
+                r#"{{"type":"user","toolUseResult":"{envelope}",
+                "message":{{"content":[{{"type":"tool_result","tool_use_id":"t1"}}]}}}}"#
+            ),
+        ]);
+        let s = summarize(None, &t, &[]);
+        assert_eq!(
+            s.changes.files_touched, 2,
+            "the files are exact — keep them"
+        );
+        assert_eq!(s.changes.lines_added, 0);
+        assert_eq!(
+            s.changes.opaque_edits, 1,
+            "lines are unknown, so the line counts must not read as a total"
+        );
+
+        // The audit surface has to show both at once, or a reader cannot tell
+        // that `files_touched` is exact while `lines_added` is a floor.
+        let by = &s.changes.by_tool["mcp__kaed-kai__edit"];
+        assert_eq!((by.calls, by.opaque, by.files_touched), (1, 1, 2));
     }
 
     /// A tool that edits files and hands back something kagviz cannot read is

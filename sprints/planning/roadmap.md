@@ -28,10 +28,13 @@ model is used only to write the headline over facts already established.**
   so an MCP file server's own unified diff is recovered instead of being
   invisible, and the subagent rollup: `subagents/agent-*.jsonl` folded in as a
   separate `delegation` tier with an explicit combined line. The facts grew
-  `changes.by_tool` and `delegation`. Swept 199 transcripts: zero skipped
-  lines, and the only values that moved were the three sessions holding kaed
-  edits. The git-diff reconciliation was rejected rather than attempted — see
-  the sprint record for why. See `sprints/003-close-the-undercount.md`.
+  `changes.by_tool` and `delegation`. The git-diff reconciliation was rejected
+  rather than attempted — see the sprint record for why. Also pinned the first
+  **regression corpora**: verbatim snapshots of kai, kubs0 and cleo under
+  `/ai-data/kagviz-data`, 405 transcripts over CLI 2.1.176–2.1.240, with the
+  facts each produced at a known commit. Zero parse failures, zero skipped
+  lines. The Windows corpus paid for itself the same day, catching a defect no
+  Linux transcript could have. See `sprints/003-close-the-undercount.md`.
 
 ## Now
 
@@ -59,5 +62,5 @@ model is used only to write the headline over facts already established.**
 - Compare two sessions side by side (the harness-eval use case).
 - Feed reports to `ai-findings` as ready-made infographics.
 - Consume `tool-results/*.txt` overflow for content-level analysis.
-- Schema-drift regression corpus: pin one transcript per CLI version and assert
-  the extractor still reads them.
+- Ship a hand-minimised, secret-cleaned fixture *in the repo*, so the corpus
+  sweep is reproducible without access to `/ai-data`.

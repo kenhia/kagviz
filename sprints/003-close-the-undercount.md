@@ -149,8 +149,17 @@ Facts, additively except where noted:
 - `changes.by_tool` — per-tool `{calls, files_touched, lines_added,
   lines_deleted, opaque}`.
 - `delegation` — `{spawns[], unjoined_spawns, inline_records, totals}`.
-- **Moved on purpose:** `changes.*` on the 3 transcripts carrying kaed edits,
-  which were previously invisible in both directions.
+- **Moved on purpose:** `changes.*` on the 3 kai transcripts carrying kaed
+  edits, which were previously invisible in both directions; and `files_touched`
+  on 4 cleo sessions, from the no-`diff` fix.
+
+Outside the repo:
+
+- **The first pinned regression corpora** — kai, kubs0 and cleo under
+  `/ai-data/kagviz-data`, 405 transcripts and 568 MB, each with the facts it
+  produced at both sprint-003 commits. The corpus proves the extractor still
+  parses; the baseline proves no number moved. `README.md` there carries the
+  sweep as a runnable block.
 
 ## What we rejected
 

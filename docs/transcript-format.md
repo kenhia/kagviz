@@ -51,8 +51,9 @@ and never rejects an unknown `type`.
 | `message.model` | Per-turn model id. A session can span several models. |
 | `toolUseResult` | Tool-specific result payload. Shape varies per tool. |
 | `isSidechain` | Older format's subagent marker. Newer versions write `subagents/` files instead and leave this `false`. |
+| `isMeta` | `true` on `user` records the **harness** wrote, not the user — most visibly the body of an invoked skill. See trap 5; kagviz does not read it yet. |
 
-## Four traps
+## Five traps
 
 ### 1. `promptId` does not mark a prompt
 
@@ -66,9 +67,14 @@ Three different things share the `user` channel:
    `image`, or `document` blocks.
 2. **Tool results** — block arrays containing `tool_result`.
 3. **Harness injections** — IDE state (`<ide_opened_file>`, `<ide_selection>`),
-   slash-command scaffolding (`<command-name>`, `<local-command-stdout>`,
-   `<local-command-caveat>`), `<system-reminder>`, and attachment placeholders
-   (`[Image: original …]`).
+   local-command output (`<local-command-stdout>`, `<local-command-caveat>`),
+   `<system-reminder>`, and attachment placeholders (`[Image: original …]`).
+
+> **Correction, sprint 004.** This list used to include `<command-name>` and
+> its siblings as "slash-command scaffolding", and `INJECTED_PREFIXES` still
+> does. That is wrong: `<command-name>` + `<command-args>` is the user's own
+> input in structured form, and discarding it throws away the prompt. See
+> trap 5 — the record that *should* be excluded is the one that follows it.
 
 Worse, injections arrive as **sibling blocks in the same record as real user
 text** — an `<ide_opened_file>` block followed by what the user actually typed.
@@ -164,6 +170,42 @@ merely defaulted.
 Frequency, measured: exactly **1** occurrence across 305 transcripts, in one
 line of one session. It cost nothing to find only because the corpus sweep
 asserts *zero* skipped lines rather than "few".
+
+### 5. A slash command writes two records, and the second one is the harness
+
+Invoking a skill produces **two consecutive `user` records**, parent and child:
+
+```jsonc
+// uuid 1f4d9c65 — no isMeta — 158 bytes. This is the user.
+{"type":"user","message":{"content":
+  "<command-message>start-sprint</command-message>\n
+   <command-name>/start-sprint</command-name>\n
+   <command-args>korg:1586 procceed with implementation</command-args>"}}
+
+// parentUuid 1f4d9c65 — isMeta: true — 7159 bytes. This is the harness.
+{"type":"user","isMeta":true,"message":{"content":
+  "Base directory for this skill: /home/ken/.claude/skills/start-sprint\n
+   # Start Sprint Skill\n ## User Input\n ```text\n korg:1586 …"}}
+```
+
+The first carries what the user typed. The second is the skill definition
+being handed to the agent — thousands of characters of instructions that were
+never anyone's prompt.
+
+`isMeta: true` is the reliable marker, and it is **not** a synonym for the
+prefix list: measured over the 405-transcript corpus, 797 user-ish records
+carry it, of which 663 are skill bodies (every skill body has it; none lack
+it) and the remaining 134 are `<local-command-caveat>`, `[Image: …]`,
+`"Skill /x is already loaded above; instructions unchanged."` and
+`"Continue from where you left off."`. It is a strict superset of several
+prefixes already on the list.
+
+**kagviz currently gets this exactly backwards** — it discards record 1 by
+prefix and counts record 2 as a user turn, so 39% of counted user prompts are
+harness text and 504 real inputs are thrown away corpus-wide. Because phases
+cut at every user turn, each of those also opens a phase boundary that should
+not exist. Not fixed here: it is a **breaking** facts change and is queued as
+korg #1605 / sprint 005, with the measurements.
 
 ## Line endings
 

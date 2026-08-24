@@ -16,9 +16,9 @@ already counted — never to produce the facts.
 ## Status
 
 Early, but usable. The deterministic core reads transcripts and summarizes
-them, `kagviz render` writes a self-contained HTML report, and the session is
-cut into labelled phases. The optional model-written headline is next; see
-`sprints/planning/roadmap.md`.
+them, `kagviz render` writes a self-contained HTML report, the session is cut
+into labelled phases, and an opt-in `--label` pass lets a model write the
+headline over facts already counted. See `sprints/planning/roadmap.md`.
 
 ```console
 $ kagviz sessions
@@ -97,6 +97,48 @@ prefer shell editing may well *be* editing kagviz cannot see. They describe the
 tools, not the intent. A descriptive label is a separate, later field written by
 a model over these facts — it will never overwrite this one.
 
+## The headline (opt-in)
+
+Everything above is counted. `--label` adds the one thing that is not: a model
+writes a sentence over the session and a short label per phase.
+
+```console
+$ kagviz render <id> --label -o report.html
+labelled by qwen2.5-7b-instruct (headline.v1)
+```
+
+Off by default, and that is the contract — a plain `render` stays a pure
+function of the transcript bytes, and a facts document nobody labelled has no
+`labels` key at all.
+
+Three things make it safe to have at all:
+
+- **It is never shown a number.** The digest handed to the model carries no
+  counts, no durations, no token totals — ranked tool *names*, ordinal phase
+  sizes, and the user's own words. A model that never sees a measurement cannot
+  write one that contradicts the panel below it.
+- **It is cached on the facts.** Same facts, same sentence, forever; a cache hit
+  never contacts the model, so a labelled report re-renders with the model host
+  switched off. Change the facts and the labels are re-written rather than
+  reused, because they described a different session.
+- **It is marked on the page.** The headline gets its own accent, its own face,
+  and an attribution naming the model; phase labels get a marked chip beside the
+  mechanical `kind`, never instead of it. The footer says which text is which.
+
+If the backend is unreachable the report renders **without** a headline and
+stderr says why — an absent headline, not a failed render, because a model must
+never become a dependency of the deterministic page.
+
+```
+--label-url    OpenAI-compatible base URL (default: $KVLLM_BASE_URL, else localhost:8000/v1)
+--label-model  model id; `auto` (default) asks the backend what it serves
+--label-cache  where cached labels live (default: <root>/.kagviz/labels)
+--relabel      ignore the cache and ask again
+```
+
+The prompt is versioned in the repo under `prompts/` — a changed prompt is a
+changed output, so it lives in git, and its bytes are part of the cache key.
+
 ## Reading the output honestly
 
 Two numbers deserve care, and both are there because leaving them out would
@@ -107,7 +149,9 @@ quietly lie:
   the page: active is the headline, wall is its sub-label, because either one
   alone misleads.
 - **phase labels name a tool mix**, never an intent. See above — this is the
-  easiest thing here to over-read.
+  easiest thing here to over-read. A `--label` run adds a *written* label
+  beside the mechanical one; the marked chip is the difference, and it is
+  marked on every occurrence for exactly that reason.
 - **opaque calls** — an edit made through the shell leaves no recoverable diff,
   so the line deltas are a floor, not a total. The report says so on the page
   rather than showing a confident zero. `changes.by_tool` breaks it down per

@@ -146,22 +146,40 @@ Baseline written to `/ai-data/kagviz-data/baselines/<host>-2026-08-23/a8dad05`.
 405 sessions. Worth knowing: it means the labels really are the sandboxed layer
 they were built as, and it gave this sprint a trustworthy anchor to diff from.
 
-## Two things the proposal got wrong
+## What the proposal could not have predicted: the boundary moves
 
-Both were reasonable and both were wrong, and saying so is cheaper than
-leaving a future reader to trust the estimate.
+The proposal expected #1605 to remove ~41 spurious cuts from `a811ca00`, about
+10% of its phases. **It removed exactly 41 — and the phase count fell by 2.**
 
-**The proposal predicted #1605 would remove ~41 spurious cuts (~10% of phases)
-from `a811ca00`. It removed 2.** That session is an hv-simulator build with
-almost no skill invocations; its 209 spans come from idle cuts. The
-*sequencing* argument survives untouched — #1605 does not dissolve #1594, and
-#1594 still had to come second because it tunes against phase counts that
-moved corpus-wide — but the magnitude was off by a factor of twenty.
+Both halves of #1605 land on the *same pair of records*, and they land in
+opposite directions. Before, the scaffold was discarded and the harness body
+cut a phase. After, the scaffold cuts a phase and the harness body is
+discarded. The two records are consecutive, so:
 
-**The proposal's baseline of "1,753 counted user prompts, 684 of them
-`isMeta`" did not reproduce.** Direct measurement puts the before figure at
-2,012. The two numbers that mattered landed exactly: 504 real inputs recovered,
-and 113 `isMeta` records already caught by prefix.
+```
+02:22:23  + /init                                            ← now cuts here
+02:22:23  - Please analyze this codebase and create a CLAU…   ← used to cut here
+```
+
+Measured on that session: **39 of the 41 recovered prompts are followed by a
+dropped harness body within 30 seconds — median gap 0.0s.** The cut does not
+disappear, it moves one record earlier, usually inside the same second. The
+net −2 is exactly the 2 drops with no scaffold to replace them.
+
+So what changed on `a811ca00` is not the phase *count* but the phase
+*openers*: 39 phases that opened with 7 KB of harness boilerplate now open with
+the line the user typed. That is the fix, and a phase count would never have
+shown it. The same mechanism explains the corpus-wide shape — −685 dropped and
++504 recovered nets to −181 prompts and −201 phases, far less movement than
+either gross figure suggests.
+
+The sequencing conclusion is unchanged and now better founded: #1605 was never
+going to dissolve #1594, because it barely moves the phase count at all.
+
+**One figure in the proposal did not reproduce.** Its baseline of "1,753
+counted user prompts, 684 of them `isMeta`" measures at 2,012 and 685. The two
+numbers that mattered landed exactly: 504 real inputs recovered, and 113
+`isMeta` records already caught by prefix.
 
 ## Knock-on, as predicted
 
@@ -177,6 +195,8 @@ works.
 - Corpus sweep, both binaries, 405 transcripts: 0 parse failures, 0 skipped
   lines; every moved field inside the intended surface, nothing outside it.
 - **Rendered and looked at**, which is how #1594 was found in the first place.
+  Four before/after pairs — report, facts and screenshot each — are in
+  `.scratch/005`, with `README.md` there saying what each one demonstrates.
   `a811ca00` before/after: the band row goes from a stripe of clipped slivers
   to clean colour, and the headline reads 12h36m / 390 phases / 185 prompts.
   A 3-span session confirms the good case did not regress — `mixed`,

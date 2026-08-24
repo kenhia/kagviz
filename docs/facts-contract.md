@@ -10,10 +10,10 @@ Treat it as a contract:
   they do not know.
 - **Changing or removing a field is.** So is changing what an existing field
   counts.
-- **Every value is computed from the transcript bytes.** Nothing in here was
-  inferred, estimated, or written by a model. A model may one day add a
-  *headline* over these facts; it will be a new field, and it will never
-  replace one.
+- **Every value is computed from the transcript bytes** — with exactly one
+  named exception, `labels`, which is the only place a model has ever written
+  into this document, is absent unless asked for, and never replaces a value.
+  Everything outside `labels` was counted. See [`labels`](#labels--the-only-model-written-field).
 - **An unknown is never rendered as a zero.** Where kagviz cannot see
   something, the document says so with a separate field (see `opaque_edits`)
   rather than reporting a confident number it does not have.
@@ -54,6 +54,7 @@ Volume and outcome:
 | `tokens` | input / output / thinking / cache read / cache write. |
 | `changes` | `files_touched`, `lines_added`, `lines_deleted` recovered from a diff, plus `opaque_edits` and a per-tool `by_tool` breakdown. |
 | `skills`, `subagents`, `subagent_transcripts` | What the session delegated to. The delegated *work* is in `delegation`. |
+| `labels` | **Absent unless asked for.** The one model-written field — see below. |
 
 ### `changes` — exact, or visibly absent
 
@@ -172,6 +173,81 @@ timeline, and a concurrent agent has no position on it.
 | `unjoined_spawns` | `Agent` calls with no transcript to read. The work happened and kagviz cannot see it — an unknown, not a zero. |
 | `inline_records` | Records lifted *out* of the parent's counts because they were inlined subagent turns. Reported so the move is visible rather than silent. |
 | `totals` | The tier summed. `changes.files_touched` merges the path sets across spawns rather than adding the counts. |
+
+### `labels` — the only model-written field
+
+Added in sprint 004, additively, and **absent** from any document that did not
+ask for it: `kagviz show --json` emits no `labels` key at all unless `--label`
+was passed. Verified over the 405-transcript corpus — every session's facts are
+byte-identical to the sprint-003 baseline without the flag.
+
+```json
+"labels": {
+  "headline": "Closed the file-change undercount with an adapter table.",
+  "phases": [ { "phase": 0, "label": "reading the extractor" },
+              { "phase": 3, "label": "chasing the Windows diff" } ],
+  "model": "qwen2.5-7b-instruct",
+  "prompt_version": "headline.v1",
+  "facts_digest": "sha256:74f72c649f78aab10…",
+  "generated": "2026-08-23T22:14:07Z"
+}
+```
+
+**Read the boundary literally.** Everything inside this object was written by a
+model; everything outside it was counted. A consumer that ignores the whole key
+gets exactly the document kagviz emitted before sprint 004 — that is what
+"additive" means here, and it is the reason the phase labels are a **parallel
+array keyed by phase index** rather than a `label` field on `Phase`. A written
+label sitting one line below `tool_calls`, in the same object, with only a field
+name to tell them apart, is the confusion the whole project is built to avoid.
+
+| Field | Meaning |
+|---|---|
+| `headline` | One sentence over the session. At most 160 characters; longer replies are cut, not rendered whole. |
+| `phases[]` | `phase` is an index into the facts' `phases` array; `label` is at most 60 characters. **Sparse** — a phase with no entry has no label, and that is an *absent* label, never a blank one. |
+| `model`, `prompt_version` | Who wrote it and which prompt did. The prompt is versioned in the repo under `prompts/`. |
+| `facts_digest` | `sha256` over this document with `labels` removed. Recompute it to learn whether the prose still describes the counts. |
+| `generated` | When the model was asked. Comes from the cache on a hit, so re-rendering does not change bytes just because time passed. |
+
+#### No number is ever model-produced
+
+Not by policy — by construction. The digest of facts handed to the model
+carries **no quantities at all**: no counts, no durations, no token totals, not
+even the number of phases. It carries ranked tool *names*, ordinal phase sizes
+(`long`/`medium`/`brief`), and the user's own words. A model that is never shown
+a measurement cannot echo one into a sentence that then disagrees with the panel
+below it, and the first time those disagreed the whole report would stop being
+worth reading.
+
+Audited over all 405 corpus transcripts: every digit reaching the model is
+either inside the user's own quoted words or part of a recorded name
+(`mcp__kaed-kubs0__read`, `deploy-kubs0`, `git branch: 003-curator`). Zero
+computed quantities.
+
+#### Reproducibility
+
+Labels are cached on `facts_digest` (plus the prompt's own bytes), so:
+
+- **Facts identical → the same labels forever**, with no model involved. A
+  cache hit never contacts the backend, so a labelled report re-renders
+  byte-for-byte with the model host switched off.
+- **Facts changed → the old labels are not reused.** They were written about a
+  different session. This means an additive change to the facts — like this one
+  — invalidates every cached label, which is correct rather than unfortunate.
+
+The cache lives in `<transcript-root>/.kagviz/labels/`, overridable with
+`--label-cache`. A model call is not reproducible on its own (`temperature: 0`
+and a fixed seed are the most a served model offers, and batching alone can move
+a token); the cache is what makes the *report* reproducible, which is why it is
+a mechanism here rather than an optimization.
+
+#### When the backend is unreachable
+
+The report renders **without a headline**, and stderr says why. Failing the
+render would make a model a dependency of the deterministic page — the exact
+inversion this field is fenced off to prevent. Absent headline, not empty
+headline; the layout is built around having none, because that is the default
+path.
 
 ### `activity` — the time series
 

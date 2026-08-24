@@ -36,11 +36,21 @@ model is used only to write the headline over facts already established.**
   lines. The Windows corpus paid for itself the same day, catching a defect no
   Linux transcript could have. See `sprints/003-close-the-undercount.md`.
 
+- **Sprint 004 — the headline pass.** The first time a model is anywhere near
+  the pipeline, and the deliverable is the seam more than the code: an opt-in
+  `--label` writes a session headline and a label per phase, into a `labels`
+  key that is the *only* model-written field and is absent without the flag.
+  Never shown a number — the digest handed to the model carries ranked names,
+  ordinal sizes and the user's own words, and nothing else, so it has no
+  measurement to contradict. Cached on a `sha256` of the facts, so a labelled
+  report re-renders byte-identically with the model host switched off. Proven
+  additive against the pinned corpus: 405/405 sessions byte-identical to the
+  sprint-003 baseline. See `sprints/004-headline-pass.md`.
+
 ## Now
 
-- **The headline pass.** Optional LLM labels for segments and a
-  session-level one-liner, cached beside the transcript so a rendered report
-  stays byte-stable once produced. Strictly additive: the facts never move.
+- Nothing in flight. The live queue is korg's Planning page; the entries below
+  are what this roadmap expects to see there.
 
 ## Next
 

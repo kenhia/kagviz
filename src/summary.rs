@@ -507,6 +507,14 @@ pub struct Summary {
     /// Work handed to subagents. A separate tier, never merged into the
     /// numbers above — see [`Delegation`].
     pub delegation: Delegation,
+
+    /// Prose a model wrote over everything above — a headline and a label per
+    /// phase. Absent unless `--label` produced it or the facts document
+    /// carried it, and never in the path that produces a number: see
+    /// [`crate::label`] for why the phase labels are a parallel array rather
+    /// than a field on [`Phase`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<crate::label::Labels>,
 }
 
 impl Summary {

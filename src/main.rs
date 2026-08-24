@@ -5,12 +5,14 @@
 
 mod discover;
 mod fmt;
+mod label;
 mod render;
 mod summary;
 mod transcript;
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use chrono::Utc;
+use clap::{Args, Parser, Subcommand};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use summary::Summary;
@@ -45,6 +47,8 @@ enum Command {
         /// Emit the facts document as JSON.
         #[arg(long)]
         json: bool,
+        #[command(flatten)]
+        label: LabelOpts,
     },
     /// Render a session as a self-contained HTML report.
     Render {
@@ -57,7 +61,30 @@ enum Command {
         /// Write the report here (default: stdout).
         #[arg(short, long, value_name = "REPORT.html")]
         out: Option<PathBuf>,
+        #[command(flatten)]
+        label: LabelOpts,
     },
+}
+
+/// The opt-in headline pass. Off by default, and that is the contract: a
+/// plain `render` is a pure function of the transcript bytes.
+#[derive(Args, Debug, Default)]
+struct LabelOpts {
+    /// Ask a model to write a headline and a label per phase over the facts.
+    #[arg(long)]
+    label: bool,
+    /// Ignore cached labels and ask the model again.
+    #[arg(long, requires = "label")]
+    relabel: bool,
+    /// OpenAI-compatible base URL (default: $KVLLM_BASE_URL, else localhost).
+    #[arg(long, value_name = "URL", requires = "label")]
+    label_url: Option<String>,
+    /// Model to label with. `auto` asks the backend what it serves.
+    #[arg(long, value_name = "MODEL", default_value = "auto", requires = "label")]
+    label_model: String,
+    /// Where cached labels live (default: <root>/.kagviz/labels).
+    #[arg(long, value_name = "DIR", requires = "label")]
+    label_cache: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -69,18 +96,69 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::Sessions { project } => list_sessions(&root, project.as_deref()),
-        Command::Show { session_id, json } => show_session(&root, &session_id, json),
+        Command::Show {
+            session_id,
+            json,
+            label,
+        } => show_session(&root, &session_id, json, &label),
         Command::Render {
             session_id,
             from,
             out,
+            label,
         } => render_report(
             &root,
             session_id.as_deref(),
             from.as_deref(),
             out.as_deref(),
+            &label,
         ),
     }
+}
+
+/// Attach model-written labels to the facts, if they were asked for.
+///
+/// Failure here is a **warning, not an error**. Making a report fail because
+/// the model backend is unreachable would put a model in the path that
+/// produces the deterministic page — the exact inversion the labels are
+/// sandboxed to prevent. The reader loses the headline and is told why.
+fn label_facts(s: &mut Summary, root: &Path, opts: &LabelOpts) {
+    if !opts.label {
+        return;
+    }
+    if let Err(e) = attach_labels(s, root, opts) {
+        eprintln!("warning: no headline written — {e:#}");
+    }
+}
+
+fn attach_labels(s: &mut Summary, root: &Path, opts: &LabelOpts) -> Result<()> {
+    let digest = label::facts_digest(s)?;
+    let dir = opts
+        .label_cache
+        .clone()
+        .unwrap_or_else(|| label::default_cache_dir(root));
+
+    // The cache is consulted before the backend is even resolved, so a report
+    // whose labels are already written re-renders with the model host off.
+    let want_model = (opts.label_model != "auto").then_some(opts.label_model.as_str());
+    if !opts.relabel
+        && let Some(hit) = label::cached(&dir, &digest, want_model)
+    {
+        s.labels = Some(hit);
+        return Ok(());
+    }
+
+    let url = opts
+        .label_url
+        .clone()
+        .or_else(|| std::env::var("KVLLM_BASE_URL").ok())
+        .unwrap_or_else(|| label::DEFAULT_BASE_URL.to_string());
+    let backend = label::Kvllm::connect(&url, &opts.label_model)?;
+    let labels = label::generate(s, &backend, Utc::now())?;
+    label::store(&dir, &labels)?;
+    eprintln!("labelled by {}", label::attribution(&labels));
+    s.labels = Some(labels);
+    Ok(())
 }
 
 fn list_sessions(root: &Path, project: Option<&str>) -> Result<()> {
@@ -152,12 +230,18 @@ fn render_report(
     id: Option<&str>,
     from: Option<&Path>,
     out: Option<&Path>,
+    label: &LabelOpts,
 ) -> Result<()> {
-    let summary = match (id, from) {
+    let mut summary = match (id, from) {
         (_, Some(path)) => load_facts(path)?,
         (Some(id), None) => load_session(root, id)?,
         (None, None) => bail!("give a session id, or --from <facts.json>"),
     };
+    // A facts document that already carries labels renders them without any
+    // model call: `--label` governs *writing* them, never showing them.
+    if summary.labels.is_none() {
+        label_facts(&mut summary, root, label);
+    }
     let html = render::report(&summary);
     match out {
         Some(path) => {
@@ -170,8 +254,10 @@ fn render_report(
     Ok(())
 }
 
-fn show_session(root: &Path, id: &str, json: bool) -> Result<()> {
-    let s = load_session(root, id)?;
+fn show_session(root: &Path, id: &str, json: bool, label: &LabelOpts) -> Result<()> {
+    let mut s = load_session(root, id)?;
+    label_facts(&mut s, root, label);
+    let s = s;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&s)?);
@@ -268,6 +354,7 @@ fn show_session(root: &Path, id: &str, json: bool) -> Result<()> {
         );
     }
     print_delegation(&s);
+    print_labels(&s);
     if s.skipped_lines > 0 {
         eprintln!(
             "\nwarning: {} line(s) did not parse; counts are partial",
@@ -320,6 +407,26 @@ fn print_delegation(s: &Summary) {
         s.combined_tool_calls(),
         s.combined_tool_failures(),
         fmt::count(s.combined_output_tokens()),
+    );
+}
+
+/// The model-written block, last and clearly fenced.
+///
+/// Last rather than first on purpose: in a terminal the counts are the answer
+/// and the sentence is the gloss. The `written` prefix is on every line so no
+/// single line of this output can be mistaken for a measurement when it is
+/// grepped, piped or pasted out of context.
+fn print_labels(s: &Summary) {
+    let Some(l) = &s.labels else {
+        return;
+    };
+    println!("\nwritten   {}", l.headline);
+    for p in &l.phases {
+        println!("written     phase {:<3} {}", p.phase + 1, p.label);
+    }
+    println!(
+        "written   ^ written by {} over the facts above — not measured",
+        label::attribution(l)
     );
 }
 

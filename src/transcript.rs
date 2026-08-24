@@ -53,6 +53,13 @@ pub struct Record {
     /// Both shapes reach the delegated tier — see `summary::Delegation`.
     #[serde(rename = "isSidechain")]
     pub is_sidechain: Option<bool>,
+    /// The harness marking a record it wrote into the user channel itself:
+    /// a skill body, a command caveat, an attachment placeholder, a resume
+    /// nudge. Set on `user` records only, and written as an explicit `false`
+    /// as often as it is omitted — hence `Option`, read through
+    /// [`Record::is_harness_written`].
+    #[serde(rename = "isMeta")]
+    pub is_meta: Option<bool>,
     /// Which spawned agent a record belongs to. Present on every record of a
     /// `subagents/agent-*.jsonl` sidecar, and on inlined sidechain records.
     /// It is what joins a subagent's work back to the parent's `Agent` call.
@@ -73,6 +80,19 @@ pub struct Record {
     #[serde(flatten)]
     #[allow(dead_code, reason = "format surface held deliberately ahead of use")]
     pub rest: Map<String, Value>,
+}
+
+impl Record {
+    /// Whether the harness wrote this record rather than the user.
+    ///
+    /// The load-bearing half of telling a prompt from an injection. A skill
+    /// invocation writes the user's line and then hands the agent a
+    /// multi-kilobyte instruction document; only the second is flagged, and
+    /// without this the document is what gets counted. Absent means "not
+    /// flagged", which is the same answer as an explicit `false`.
+    pub fn is_harness_written(&self) -> bool {
+        self.is_meta.unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -132,11 +152,17 @@ impl Block {
 }
 
 /// Markers for content the harness writes into the user channel: IDE state,
-/// slash-command scaffolding, system reminders, attachment placeholders.
+/// system reminders, local-command output, attachment placeholders.
 ///
 /// None of it is the user saying something, and all of it arrives on `user`
 /// records carrying a `promptId` — which is why `promptId` cannot be used to
 /// find prompts. It marks the turn a record belongs to, not its authorship.
+///
+/// The list is the *narrow* half of that job and shrinking:
+/// [`Record::is_harness_written`] catches injections by the flag the harness
+/// sets, and is a strict superset of several entries that used to be here.
+/// The `<command-*>` tags are deliberately **absent** — they are not noise but
+/// structure, and [`command_line`] reads the user's own line back out of them.
 pub const INJECTED_PREFIXES: &[&str] = &[
     "<system-reminder>",
     "<ide_opened_file>",
@@ -145,12 +171,45 @@ pub const INJECTED_PREFIXES: &[&str] = &[
     "<local-command-caveat>",
     "<local-command-stdout>",
     "<local-command-stderr>",
-    "<command-name>",
-    "<command-message>",
-    "<command-args>",
     "[Image:",
     "[Request interrupted",
 ];
+
+/// The command line the user typed, read back out of the scaffold a slash
+/// command writes into the user channel.
+///
+/// A slash command emits one `user` record holding `<command-name>`,
+/// `<command-message>` and — usually — `<command-args>`. That record *is* the
+/// user's input, 158 bytes of it, and reconstructing it from the tags is
+/// exact where prefix-stripping the instruction document that follows would be
+/// a guess. `<command-message>` is the name without its slash and is ignored.
+///
+/// Tags are read by name rather than by position: the corpus carries both tag
+/// orders, every line after the first may be indented by the emitting command,
+/// and `<command-args>` is sometimes present but empty (`/clear`) and
+/// sometimes absent entirely (`/exit`). Both mean "no arguments".
+///
+/// Returns `None` when there is no `<command-name>`, which is how a caller
+/// asks "is this a command scaffold at all?".
+pub fn command_line(text: &str) -> Option<String> {
+    let name = tag_value(text, "command-name")?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    match tag_value(text, "command-args").map(str::trim) {
+        Some(args) if !args.is_empty() => Some(format!("{name} {args}")),
+        _ => Some(name.to_string()),
+    }
+}
+
+/// The text between `<tag>` and `</tag>`, or `None` if the pair is not there.
+fn tag_value<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = text.find(&open)? + open.len();
+    let end = text[start..].find(&close)? + start;
+    Some(&text[start..end])
+}
 
 /// Per-turn token counts.
 ///

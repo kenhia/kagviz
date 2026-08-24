@@ -18,6 +18,21 @@ Treat it as a contract:
   something, the document says so with a separate field (see `opaque_edits`)
   rather than reporting a confident number it does not have.
 
+### Breaking changes, in order
+
+A breaking change is allowed; making one silently is not. Each one lands with
+the numbers it moved, measured over the pinned corpus, so a consumer can tell
+whether it is affected without re-deriving anything.
+
+| Sprint | What changed | Measured over 405 transcripts |
+|---|---|---|
+| 005 | `user_prompts`, `phases`, `user_involvement` and `activity…buckets[].user_turns` stop counting harness-written records (`isMeta`) and start counting slash-command invocations. | `user_prompts` 2,012 → **1,831**: 685 harness bodies dropped, 504 real user inputs recovered. `phases` 4,003 → **3,802**. |
+| 005 | `active_secs` is redefined as the sum of the span lengths — see below. | 560,283s → **558,730s**; 305 of 405 sessions corrected, every one downward, worst −198s. |
+
+Nothing else moved: `wall_secs`, `idle_secs`, `tokens`, `tool_calls`,
+`tool_failures`, `changes` and the span boundaries themselves are
+byte-identical across the change.
+
 The renderer round-trips it: a report built from a serialized facts document is
 byte-identical to one built from the summary in memory, and byte-identical
 across Linux and Windows. There is a test that says so
@@ -41,7 +56,7 @@ Time — all three are reported because any one alone misleads:
 | `started`, `ended` | First and last timestamped record, RFC 3339 UTC. |
 | `wall_secs` | `ended - started`. |
 | `idle_secs` | Sum of inter-record gaps of `IDLE_GAP_SECS` (120s) or more. |
-| `active_secs` | `wall_secs - idle_secs`. |
+| `active_secs` | The sum of the `activity.spans` lengths — the stretches of work, each measured once. **Not** `wall_secs - idle_secs`: that is the same quantity through two truncations against the spans' one each, and on a session with many spans the two drift (198s of 12h39m at 209 spans). Read off the spans, so `active_secs`, the strip and the phase durations are one number rather than three that nearly agree. Changed in 005. |
 
 Volume and outcome:
 
@@ -49,7 +64,7 @@ Volume and outcome:
 |---|---|
 | `records` | Transcript lines parsed. |
 | `skipped_lines` | Lines that did **not** parse. Non-zero means every number here is partial, and the report says so on the page. |
-| `assistant_turns`, `user_prompts` | `user_prompts` counts real user turns only — see the `promptId` trap in `transcript-format.md`. |
+| `assistant_turns`, `user_prompts` | `user_prompts` counts real user turns only. Two traps, both in `transcript-format.md`: `promptId` rides on injected records too, and a record the harness wrote carries `isMeta` — including the instruction document a skill invocation hands the agent, which is *not* the user speaking. The `<command-*>` scaffold beside it **is**. |
 | `tool_calls`, `tool_failures` | tool name → count. Failures are joined to their call by `tool_use_id`; a failure whose call is not in the file is blamed on `<unknown>` rather than dropped. |
 | `tokens` | input / output / thinking / cache read / cache write. |
 | `changes` | `files_touched`, `lines_added`, `lines_deleted` recovered from a diff, plus `opaque_edits` and a per-tool `by_tool` breakdown. |
@@ -163,6 +178,11 @@ anyone can recompute is not a separate fact. What is not optional is showing it.
 **`active_secs` does not combine.** A subagent runs while the session waits on
 it, so those seconds overlap rather than add. There is deliberately no
 `combined_active_secs`; tokens add across concurrent agents, seconds do not.
+
+A spawn's `active_secs` carries the same definition as the session's — the
+stretches of its own work, summed — so the two are comparable side by side.
+The delegated tier has no `activity`, so there are no spans to read it off;
+the definition is applied to the spawn's timestamps directly.
 
 **Subagents are absent from `activity` and `phases`.** Those cut the *parent's*
 timeline, and a concurrent agent has no position on it.
@@ -307,10 +327,11 @@ work, and giving them to neither phase would make the durations fail to add up
 with nothing on the page to show it. So **the phases of one span sum to exactly
 that span's `secs`**, milliseconds and all.
 
-They do *not* sum to `active_secs`. That difference is older than this field:
-`active_secs` is `wall_secs - idle_secs`, two truncations, while the spans
-truncate once each — on the corpus's 209-span session the two disagree by 198
-seconds out of 12h39m. Phases inherit it; they did not introduce it.
+Since 005 they also sum to `active_secs` exactly, because `active_secs` is now
+read off the same spans. Before that it was `wall_secs - idle_secs` — two
+truncations against the spans' one each — and the two disagreed by up to 198
+seconds out of 12h39m on the corpus's 209-span session. The quantity being
+counted did not change; where it is measured did.
 
 `opened_by` is the preview of the user turn that opened the phase, and is
 **absent** when the phase opens a resumed span instead: work picked up again
@@ -354,6 +375,12 @@ An ordered array, tagged by `kind`:
 whitespace collapsed — harness-injected context is excluded, which is the whole
 point of the classifier. An empty `preview` with `attachments > 0` is the user
 pasting an image or document and saying nothing.
+
+A slash command reads as the line the user typed — `/start-sprint korg:1606
+proceed with implementation` — rebuilt from the `<command-name>` and
+`<command-args>` tags of the record the harness writes for it. That is exact,
+where stripping boilerplate off the instruction document that follows would be
+a guess at the same string.
 
 `chosen` is absent when the transcript holds no answer. That is an interrupted
 question, not a silent one, and it must not be rendered as a default choice.

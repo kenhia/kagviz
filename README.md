@@ -32,7 +32,13 @@ phases    44 (mostly running)
                3  mixed         8m
               26  discussing    5m
                4  filing        4m
-files     3 touched, +57/-3  [28 opaque shell call(s) unaccounted]
+files     3 touched, +57/-3  [28 opaque call(s) unaccounted]
+              28  Bash  (28 unreadable)
+               6  Edit  (3 file(s) +57/-3)
+delegated 2 agent(s), 56 tool call(s), 35,663 out
+            Explore       8 call(s)       2m    10,548 out  Summarize sprint deltas
+            Explore      48 call(s)       5m    25,115 out  Map linking-layer code
+combined  133 tool call(s), 4 failed, 406,894 out  (session + delegated)
 ```
 
 `kagviz show <id> --json` emits the whole facts document. That JSON is the
@@ -102,9 +108,16 @@ quietly lie:
   alone misleads.
 - **phase labels name a tool mix**, never an intent. See above — this is the
   easiest thing here to over-read.
-- **opaque shell calls** — edits made through the shell leave no recoverable
-  diff, so the line deltas are a floor, not a total. The report says so on the
-  page rather than showing a confident zero.
+- **opaque calls** — an edit made through the shell leaves no recoverable diff,
+  so the line deltas are a floor, not a total. The report says so on the page
+  rather than showing a confident zero. `changes.by_tool` breaks it down per
+  tool so the claim can be checked: which tools kagviz read exact numbers from,
+  and which it could only count.
+- **delegated work is a separate tier** — a subagent's tool calls and tokens
+  are never folded into the parent's totals, because a session that spawned two
+  agents really did make two `Agent` calls. Both tiers are shown with the sum
+  spelled out. Active time is the exception and is *not* summed: a subagent runs
+  while the session waits on it, so those seconds overlap rather than add.
 
 If any transcript line fails to parse, the report opens with a banner saying
 how many. A partial reading is never presented as a complete one.

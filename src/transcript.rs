@@ -50,9 +50,14 @@ pub struct Record {
     pub git_branch: Option<String>,
     /// Older CLI versions inlined subagent turns into the main transcript and
     /// flagged them here; newer ones write `subagents/` sidecar files instead.
+    /// Both shapes reach the delegated tier — see `summary::Delegation`.
     #[serde(rename = "isSidechain")]
-    #[expect(dead_code)]
     pub is_sidechain: Option<bool>,
+    /// Which spawned agent a record belongs to. Present on every record of a
+    /// `subagents/agent-*.jsonl` sidecar, and on inlined sidechain records.
+    /// It is what joins a subagent's work back to the parent's `Agent` call.
+    #[serde(rename = "agentId")]
+    pub agent_id: Option<String>,
     /// Groups every record belonging to one user turn — including tool
     /// results and harness-injected context. Emphatically *not* a marker of
     /// user authorship; see [`INJECTED_PREFIXES`].
@@ -181,6 +186,29 @@ pub struct OutputTokenDetails {
 pub struct Transcript {
     pub records: Vec<Record>,
     pub skipped: usize,
+}
+
+/// A subagent transcript read from a `subagents/agent-*.jsonl` sidecar.
+#[derive(Debug)]
+pub struct Subagent {
+    /// Taken from the file name. The records carry the same id in `agentId`,
+    /// and that one wins where present — the name is the fallback for a CLI
+    /// that stops writing the field.
+    pub agent_id: Option<String>,
+    pub transcript: Transcript,
+}
+
+/// Read one subagent sidecar, recovering its agent id from the file name.
+pub fn read_subagent(path: &Path) -> Result<Subagent> {
+    let agent_id = path
+        .file_stem()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_prefix("agent-"))
+        .map(str::to_string);
+    Ok(Subagent {
+        agent_id,
+        transcript: read(path)?,
+    })
 }
 
 /// Read a transcript, skipping (and counting) lines that will not parse.

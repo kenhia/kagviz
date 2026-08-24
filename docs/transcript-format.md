@@ -5,8 +5,12 @@ was established by inspecting real transcripts; nothing is from documentation.
 The format is undocumented and drifts between CLI releases, so treat this as a
 field guide with a date on it rather than a spec.
 
-_Last checked against CLI 2.1.209 – 2.1.238, August 2026, over 197 transcripts on
-kai (Linux) and 108 on cleo (Windows)._
+_Last checked 2026-08-23 against **405 transcripts** written by CLI 2.1.176 –
+2.1.240 (32 distinct versions): 199 on kai and 93 on kubs0 (Linux), 113 on cleo
+(Windows). Those three corpora are pinned under `/ai-data/kagviz-data`, with
+the facts each produced at a known commit; see its `README.md`. Earlier
+revisions of this file cited 2.1.209 – 2.1.238, which was the range checked,
+not the range on disk._
 
 ## Layout on disk
 
@@ -89,16 +93,51 @@ unified-diff hunks, so per-file line deltas are exact. A `create` result has an
 empty patch and the whole file body in `content`, so its line count is the
 addition.
 
-But anything that edits through the **shell** — `sed`, a heredoc, a redirect —
-leaves no recoverable diff, and MCP editors carry their own result shapes. A
-session that did all its editing through `Bash` shows zero file changes unless
-that gap is surfaced. kagviz therefore reports `opaque_edits` beside the line
-deltas: a zero that means "nothing changed" and a zero that means "kagviz could
-not see it" are different readings, and conflating them makes the whole report
-untrustworthy.
+Anything that edits through the **shell** — `sed`, a heredoc, a redirect —
+leaves no recoverable diff at all. A session that did all its editing through
+`Bash` shows zero file changes unless that gap is surfaced. kagviz therefore
+reports `opaque_edits` beside the line deltas: a zero that means "nothing
+changed" and a zero that means "kagviz could not see it" are different
+readings, and conflating them makes the whole report untrustworthy.
 
 This matters more than it sounds. Under some agent instructions, shell editing
 is the *default*, so the undercount is systematic rather than occasional.
+
+**MCP file servers carry their own diff, and it is recoverable.** Sprint 003
+added an adapter table for them. The measured shape (`mcp__kaed-*__edit`) is
+the trap: `toolUseResult` is a **JSON string**, not an object.
+
+```json
+"toolUseResult": "{\"applied\":true,\"diff\":\"--- a/m.yml\\n+++ b/m.yml\\n@@ -1,3 +1,4 @@\\n ctx\\n-gone\\n+one\\n\",\"files\":[{\"path\":\"m.yml\"}],\"txn_id\":28}"
+```
+
+Parse the string, then read `diff` as a unified diff and `files[].path` for the
+files. `"applied": false` means the server refused the edit — a *known* zero,
+not an unknown, so it must not be counted as opaque. Note the paths are
+root-relative and may not even name a file on this host.
+
+**The two halves arrive independently.** 16 results in the cleo corpus are
+`{"applied":true,"files":[…]}` with **no `diff` key** — the edit landed and
+named its files exactly, and only the line counts are absent. Treating that as
+"unreadable" drops file paths the transcript is holding (35 of them, corpus
+-wide). Take the files, and still charge `opaque_edits` for the missing lines.
+No transcript on kai or kubs0 has this shape; it was found only because a
+Windows corpus was snapshotted.
+
+Counting a unified diff by `+`/`-` prefix is wrong: a deleted line whose own
+content is `--` arrives as `---` and gets eaten as a file header. Count only
+lines *inside* a hunk (after `@@`), and match the header as the `--- `/`+++ `
+pair. Markdown is full of `---`.
+
+**`file-history-delta` is a dead end. Do not spend the afternoon.** The record
+type looks exactly like what the shell-edit gap needs — the harness tracking
+every file it saw change, with `trackingPath` (relative to `cwd`, or to
+`backup.realParentDir` when the file is outside it) and a backup reference —
+and there are 1,610 of them in the corpus. Measured in sprint 003: the set of
+files it names is a strict **subset** of the files `structuredPatch` already
+covers. Tracked-but-not-patched, corpus-wide: **0**. It is a
+backup-before-`Edit` marker, not a filesystem watcher, and it cannot see a
+shell edit.
 
 ### 4. `null` is not the same as absent
 
@@ -132,12 +171,41 @@ Transcripts are written **LF even on Windows** — checked across 40 cleo
 transcripts, none CRLF. Do not rely on that: `read()` trims each line, so a
 stray `\r` is absorbed either way.
 
+## Subagents
+
+`subagents/agent-<agentId>.jsonl`, one file per spawn, holding ordinary
+records. They are self-identifying twice over: every record carries `agentId`,
+and the same id is in the file name. They also carry the **parent's**
+`sessionId`, so a sidecar is never ambiguous about which session it belongs to.
+
+The join back to the parent is the `Agent` tool result, whose `toolUseResult`
+is an object:
+
+```json
+{ "agentId": "ad59e1be0a55a2ed0", "description": "Summarize sprints 013-020 deltas",
+  "resolvedModel": "claude-opus-4-8[1m]", "isAsync": true, "status": "async_launched",
+  "outputFile": "…", "canReadOutputFile": true, "prompt": "…" }
+```
+
+`subagent_type` is on the *call*'s `input`, not the result, so both halves are
+needed. `outputFile` is not: the file name carries the id already.
+
+The undercount here is severe. One corpus spawn ran **48 tool calls and 25k
+output tokens** while its parent recorded a single `Agent` call.
+
+**The drift:** older CLI versions inlined subagent turns into the main
+transcript with `isSidechain: true` instead of writing sidecars. Both shapes
+must be read. Note the direction of the error is *opposite* — inlined records
+inflate the parent rather than hiding the subagent — so they have to be lifted
+out of the parent's counts, not just noticed. There are **zero** such records
+in the kai corpus, so that path is held by unit tests, not by a measurement.
+
 ## What else is recoverable
 
 Already extracted: tool calls by name, failures joined to their call via
 `tool_use_id`, `AskUserQuestion` calls with full question text and options,
-`Skill` invocations, subagent spawns with `subagent_type` and `resolvedModel`,
-pasted images and documents.
+`Skill` invocations, subagent transcripts folded in as a separate tier (see
+**Subagents** above), MCP file-server diffs, pasted images and documents.
 
 **`AskUserQuestion` answers.** The question text and options are in the
 `tool_use` block's `input.questions[]`. What the user *chose* is in the

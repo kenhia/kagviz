@@ -116,16 +116,22 @@ fn headline(h: &mut String, s: &Summary) {
         &s.assistant_turns.to_string(),
         &format!("{} user prompt(s)", s.user_prompts),
     );
-    stat(
-        h,
-        "tools",
-        &s.total_tool_calls().to_string(),
-        &if failures > 0 {
-            format!("{failures} failed")
-        } else {
-            "none failed".to_string()
-        },
-    );
+    let failed = if failures > 0 {
+        format!("{failures} failed")
+    } else {
+        "none failed".to_string()
+    };
+    // Delegated calls are named right here rather than only in the tier
+    // below. A session that spawned three agents shows three `Agent` calls in
+    // this number, and a reader who stops at the headline should still learn
+    // that most of the work happened somewhere else.
+    let delegated = s.delegation.totals.tool_calls.values().sum::<u32>();
+    let note = if delegated > 0 {
+        format!("{failed} · {} more delegated", delegated)
+    } else {
+        failed
+    };
+    stat(h, "tools", &s.total_tool_calls().to_string(), &note);
     h.push_str("</section>\n");
 }
 
@@ -533,9 +539,41 @@ fn file_changes(h: &mut String, s: &Summary) {
         fmt::count(c.lines_added as u64),
         fmt::count(c.lines_deleted as u64),
     ));
+    if !c.by_tool.is_empty() {
+        // Where the numbers came from, so the reader can check the claim
+        // rather than take it. Ordered by calls so the tool that did the most
+        // is at the top, and the opaque ones cannot hide at the bottom.
+        let mut rows: Vec<(&String, &crate::summary::ToolChanges)> = c.by_tool.iter().collect();
+        rows.sort_by(|a, b| b.1.calls.cmp(&a.1.calls).then_with(|| a.0.cmp(b.0)));
+        h.push_str("<ul class=\"sources\">\n");
+        for (tool, t) in rows {
+            let detail = if t.opaque == t.calls {
+                "<span class=\"unseen\">no readable diff</span>".to_string()
+            } else {
+                format!(
+                    "{} file(s) <span class=\"add\">+{}</span> <span class=\"del\">−{}</span>{}",
+                    t.files_touched,
+                    fmt::count(t.lines_added as u64),
+                    fmt::count(t.lines_deleted as u64),
+                    if t.opaque > 0 {
+                        format!(" · <span class=\"unseen\">{} unreadable</span>", t.opaque)
+                    } else {
+                        String::new()
+                    },
+                )
+            };
+            h.push_str(&format!(
+                "<li><span class=\"name\">{}</span><span class=\"n\">{}×</span>\
+                 <span class=\"d\">{detail}</span></li>\n",
+                esc(tool),
+                t.calls,
+            ));
+        }
+        h.push_str("</ul>\n");
+    }
     if c.opaque_edits > 0 {
         h.push_str(&format!(
-            "<p class=\"note unknown\">{} shell call(s) could have changed files with no \
+            "<p class=\"note unknown\">{} call(s) could have changed files and left no \
              recoverable diff. Those edits are <strong>not</strong> in the counts above — \
              an unknown, not a zero.</p>\n",
             c.opaque_edits
@@ -629,6 +667,9 @@ fn involvement(h: &mut String, s: &Summary) {
 
 fn delegation(h: &mut String, s: &Summary) {
     if s.skills.is_empty() && s.subagents.is_empty() {
+        // A sidecar can outlive the `Agent` record that spawned it, so the
+        // tier is not gated on the chips above having anything to show.
+        delegated_tier(h, s);
         return;
     }
     h.push_str("<section class=\"card\">\n<h2>Skills &amp; delegation</h2>\n<p>");
@@ -642,11 +683,88 @@ fn delegation(h: &mut String, s: &Summary) {
         ));
     }
     h.push_str("</p>\n");
-    if s.subagent_transcripts > 0 {
+    h.push_str("</section>\n");
+    delegated_tier(h, s);
+}
+
+/// Delegated work, as its own tier with an explicit combined line.
+///
+/// The tier is separate on purpose: rolling a subagent's 48 tool calls silently
+/// into the parent's total would hide exactly the number a reader is here for,
+/// and so would leaving them to add it up themselves. Both tiers, then the sum,
+/// spelled out.
+fn delegated_tier(h: &mut String, s: &Summary) {
+    let d = &s.delegation;
+    if d.is_empty() {
+        return;
+    }
+    h.push_str("<section class=\"card wide\">\n<h2>Delegated work</h2>\n");
+
+    if !d.spawns.is_empty() {
+        h.push_str(
+            "<table class=\"tier\">\n<thead><tr><th>agent</th><th>what for</th>\
+                    <th class=\"r\">tools</th><th class=\"r\">active</th>\
+                    <th class=\"r\">output</th></tr></thead>\n<tbody>\n",
+        );
+        for spawn in &d.spawns {
+            let calls: u32 = spawn.tool_calls.values().sum();
+            let failed: u32 = spawn.tool_failures.values().sum();
+            h.push_str(&format!(
+                "<tr><td><span class=\"chip agent\">{}</span>{}</td><td>{}</td>\
+                 <td class=\"r\">{calls}{}</td><td class=\"r\">{}</td>\
+                 <td class=\"r\">{}</td></tr>\n",
+                esc(spawn.subagent_type.as_deref().unwrap_or("agent")),
+                spawn
+                    .model
+                    .as_deref()
+                    .map(|m| format!("<span class=\"sub\">{}</span>", esc(m)))
+                    .unwrap_or_default(),
+                esc(spawn.description.as_deref().unwrap_or("—")),
+                if failed > 0 {
+                    format!(" <em>{failed} failed</em>")
+                } else {
+                    String::new()
+                },
+                fmt::duration(spawn.active_secs),
+                fmt::count(spawn.tokens.output),
+            ));
+        }
+        h.push_str("</tbody>\n</table>\n");
+    }
+
+    let delegated_calls: u32 = d.totals.tool_calls.values().sum();
+    h.push_str(&format!(
+        "<p class=\"combined\">Session <strong>{}</strong> tool call(s) · delegated \
+         <strong>{delegated_calls}</strong> · <strong>{}</strong> combined. \
+         Output tokens {} + {} = <strong>{}</strong>.</p>\n",
+        s.total_tool_calls(),
+        s.combined_tool_calls(),
+        fmt::count(s.tokens.output),
+        fmt::count(d.totals.tokens.output),
+        fmt::count(s.combined_output_tokens()),
+    ));
+    // Seconds are the one thing that does not add: a subagent runs while the
+    // parent waits on it, so the two overlap in real time. Said out loud,
+    // because a table of per-agent "active" invites the sum.
+    h.push_str(
+        "<p class=\"note\">Active time is <strong>not</strong> summed: a subagent runs \
+         while the session waits on it, so those seconds overlap rather than add.</p>\n",
+    );
+
+    if d.unjoined_spawns > 0 {
         h.push_str(&format!(
-            "<p class=\"note unknown\">{} subagent transcript(s) sit beside this session and \
-             are <strong>not</strong> folded into the numbers above.</p>\n",
-            s.subagent_transcripts
+            "<p class=\"note unknown\">{} spawn(s) left no transcript to read. Their work \
+             happened and is <strong>not</strong> in any number here — an unknown, not a \
+             zero.</p>\n",
+            d.unjoined_spawns
+        ));
+    }
+    if d.inline_records > 0 {
+        h.push_str(&format!(
+            "<p class=\"note\">{} record(s) in this transcript were subagent turns inlined \
+             by an older CLI. They are counted in this tier, not in the session's own \
+             totals.</p>\n",
+            d.inline_records
         ));
     }
     h.push_str("</section>\n");
@@ -862,13 +980,37 @@ ol.turns .what{min-width:0;overflow-wrap:anywhere;max-width:104ch}
 code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em}
 footer{color:var(--muted);font-size:11.5px;border-top:1px solid var(--line);
   padding-top:14px;margin-top:24px}
+
+/* Where a file-change number came from: the audit surface for the adapter
+   table. Deliberately quiet — it is there to be checked, not read. */
+.sources{list-style:none;margin:.7rem 0 0;padding:0;font-size:.82rem}
+.sources li{display:flex;gap:.5rem;align-items:baseline;padding:.18rem 0;
+  border-top:1px solid var(--line)}
+.sources .name{flex:0 0 auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  color:var(--muted);overflow-wrap:anywhere}
+.sources .n{flex:0 0 auto;color:var(--muted);font-variant-numeric:tabular-nums}
+.sources .d{flex:1 1 auto;text-align:right}
+.unseen{color:var(--ask);font-style:italic}
+
+/* The delegated tier. */
+table.tier{width:100%;border-collapse:collapse;font-size:.88rem;margin-top:.4rem}
+table.tier th{text-align:left;font-weight:600;color:var(--muted);font-size:.75rem;
+  text-transform:uppercase;letter-spacing:.04em;padding:.3rem .5rem;
+  border-bottom:1px solid var(--line)}
+table.tier td{padding:.42rem .5rem;border-bottom:1px solid var(--line);
+  vertical-align:top}
+table.tier .r{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+table.tier .sub{display:block;color:var(--muted);font-size:.72rem;margin-top:.15rem;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+p.combined{margin:.7rem 0 .2rem;padding:.55rem .7rem;background:var(--chip);
+  border-radius:6px;font-size:.9rem}
 "#;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::summary::{Summary, summarize};
-    use crate::transcript::Transcript;
+    use crate::transcript::{Subagent, Transcript};
 
     fn render_lines(lines: &[&str]) -> String {
         let t = Transcript {
@@ -878,7 +1020,7 @@ mod tests {
                 .collect(),
             skipped: 0,
         };
-        report(&summarize(None, &t))
+        report(&summarize(None, &t, &[]))
     }
 
     /// The facts JSON is a contract, and the renderer is its first consumer:
@@ -905,7 +1047,7 @@ mod tests {
             .collect(),
             skipped: 0,
         };
-        let direct = summarize(None, &t);
+        let direct = summarize(None, &t, &[]);
         let json = serde_json::to_string(&direct).unwrap();
         let round_tripped: Summary = serde_json::from_str(&json).unwrap();
         assert_eq!(report(&direct), report(&round_tripped));
@@ -919,6 +1061,69 @@ mod tests {
         );
         assert_eq!(round_tripped.activity.spans.len(), 2);
         assert_eq!(round_tripped.tokens.output, 40);
+    }
+
+    /// The delegated tier on the page: both tiers visible, and the sum stated
+    /// rather than left as an exercise. A report that shows "1 tool call" for a
+    /// session whose subagent ran fifty is the undercount this sprint exists to
+    /// fix, and it would be just as wrong to fix it by quietly adding them up.
+    #[test]
+    fn the_report_shows_delegated_work_beside_the_parents_and_states_the_sum() {
+        let parent = Transcript {
+            records: [
+                r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                    "content":"map it"}}"#,
+                r#"{"type":"assistant","timestamp":"2026-08-20T10:00:05.000Z","message":{
+                    "usage":{"output_tokens":100},
+                    "content":[{"type":"tool_use","id":"t1","name":"Agent",
+                                "input":{"subagent_type":"Explore"}}]}}"#,
+                r#"{"type":"user","timestamp":"2026-08-20T10:00:40.000Z","toolUseResult":{
+                    "agentId":"a1","description":"Map the linking layer",
+                    "resolvedModel":"claude-opus-5"},
+                    "message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]}}"#,
+            ]
+            .iter()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect(),
+            skipped: 0,
+        };
+        let spawned = Subagent {
+            agent_id: Some("a1".to_string()),
+            transcript: Transcript {
+                records: [r#"{"type":"assistant","isSidechain":true,"agentId":"a1",
+                        "timestamp":"2026-08-20T10:00:10.000Z","message":{
+                        "usage":{"output_tokens":900},
+                        "content":[{"type":"tool_use","id":"s1","name":"Grep"},
+                                   {"type":"tool_use","id":"s2","name":"Read"}]}}"#]
+                .iter()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect(),
+                skipped: 0,
+            },
+        };
+        let direct = summarize(None, &parent, std::slice::from_ref(&spawned));
+        let html = report(&direct);
+
+        assert!(html.contains("Delegated work"));
+        assert!(html.contains("Map the linking layer"), "what it was for");
+        assert!(html.contains("claude-opus-5"), "which model actually ran");
+        assert!(
+            html.contains("<strong>3</strong> combined"),
+            "the combined line must be on the page, not left to the reader"
+        );
+        assert!(
+            html.contains("2 more delegated"),
+            "the headline must say the tool count is not the whole story"
+        );
+        assert!(
+            html.contains("not</strong> summed"),
+            "overlapping seconds must be called out, not implied"
+        );
+
+        // And the tier survives the contract seam like everything else.
+        let json = serde_json::to_string(&direct).unwrap();
+        let round_tripped: Summary = serde_json::from_str(&json).unwrap();
+        assert_eq!(report(&round_tripped), html);
     }
 
     /// No network, ever. The assertions name the constructs that actually
@@ -1025,7 +1230,7 @@ mod tests {
             .collect(),
             skipped: 0,
         };
-        let s = summarize(None, &t);
+        let s = summarize(None, &t, &[]);
         assert_eq!(
             s.phases.iter().map(|p| p.secs).sum::<i64>(),
             s.activity.spans.iter().map(|sp| sp.secs).sum::<i64>()

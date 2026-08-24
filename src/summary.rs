@@ -5,7 +5,7 @@
 //! model-written narrative sits *on top* of this, never inside it.
 
 use crate::discover::SessionPaths;
-use crate::transcript::{Block, Content, INJECTED_PREFIXES, Transcript};
+use crate::transcript::{Block, Content, INJECTED_PREFIXES, Record, Subagent, Transcript};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -60,7 +60,15 @@ pub struct TokenTotals {
 }
 
 /// What a file-modifying tool did, as recovered from its result payload.
-#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+///
+/// Every quantity here is in exactly one of two states, and the document says
+/// which: **recovered** (an exact number, read out of a diff the transcript
+/// carries) or **unrecovered** (a call that could have changed a file and
+/// exposed nothing readable). There is no third state — an *inferred* number,
+/// such as a `git diff` over the session window, is not a function of the
+/// transcript bytes and does not belong in this document. See
+/// `docs/facts-contract.md`.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct FileChanges {
     pub files_touched: usize,
@@ -69,11 +77,39 @@ pub struct FileChanges {
     /// Tool calls that plainly could have changed files but exposed no
     /// recoverable diff.
     ///
-    /// `Bash` heredocs and `sed` edits land here, and so does any MCP editor
-    /// with its own result shape. Surfaced rather than hidden, because a zero
-    /// that means "nothing changed" and a zero that means "kagviz could not
-    /// see it" are very different readings.
+    /// `Bash` heredocs and `sed` edits land here, and so does any file-editing
+    /// MCP tool whose result [`recover_changes`] could not read. Surfaced
+    /// rather than hidden, because a zero that means "nothing changed" and a
+    /// zero that means "kagviz could not see it" are very different readings.
     pub opaque_edits: usize,
+    /// The same picture broken out per tool: which tools kagviz recovered
+    /// exact numbers from, and which ones it could only count.
+    ///
+    /// This is the audit surface for the adapter table — the same argument
+    /// [`ToolMix`] makes for a phase's [`PhaseKind`]. Without it a reader has
+    /// to take "+340 −88, and 51 unseen" on faith; with it they can see that
+    /// the 51 were `Bash` and the 340 came from `Edit` and `mcp__kaed-kai__edit`.
+    pub by_tool: BTreeMap<String, ToolChanges>,
+}
+
+/// One tool's contribution to the file-change picture.
+///
+/// `calls` is every edit-capable call of the tool. `opaque` counts those whose
+/// **line deltas** could not be read — which is not quite the same as learning
+/// nothing from them: a call that named its files but carried no diff is
+/// opaque here and still counted in `files_touched`. So `files_touched` can be
+/// exact on a tool whose `opaque` is non-zero, and the two must be read
+/// separately rather than as one verdict on the call.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ToolChanges {
+    /// Calls of this tool that could have changed a file.
+    pub calls: usize,
+    pub files_touched: usize,
+    pub lines_added: usize,
+    pub lines_deleted: usize,
+    /// Of `calls`, those that exposed no diff kagviz could read.
+    pub opaque: usize,
 }
 
 /// One column of the activity strip: what happened in a fixed slice of time.
@@ -350,6 +386,85 @@ impl Involvement {
     }
 }
 
+/// One delegated agent's work.
+///
+/// A subagent transcript is a session transcript in miniature, but it is not
+/// summarized as one: it has no user turns to cut phases at, and its activity
+/// runs *concurrently* with the parent's, so it has no place on the parent's
+/// time strip. What it has is cost and output, and that is what is carried.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Spawn {
+    /// Joins the sidecar file, its records, and the parent's `Agent` result.
+    pub agent_id: Option<String>,
+    /// From the parent's `Agent` call input, when the spawn could be joined.
+    pub subagent_type: Option<String>,
+    /// From the parent's `Agent` result — what the agent was asked for.
+    pub description: Option<String>,
+    /// `resolvedModel` from the parent's `Agent` result. A delegated turn can
+    /// run on a different model than the session it was spawned from, which is
+    /// exactly the kind of cost a reader wants to see.
+    pub model: Option<String>,
+    /// True when the numbers came from a `subagents/agent-*.jsonl` sidecar,
+    /// false when they came from `isSidechain` records inlined in the parent
+    /// by an older CLI.
+    pub sidecar: bool,
+    pub started: Option<DateTime<Utc>>,
+    pub ended: Option<DateTime<Utc>>,
+    /// Wall span less idle gaps, by the same [`IDLE_GAP_SECS`] rule the parent
+    /// uses. **Not** addable to the parent's `active_secs`: a subagent runs
+    /// while the parent waits, so the two overlap in real time.
+    pub active_secs: i64,
+    pub records: usize,
+    pub skipped_lines: usize,
+    pub assistant_turns: usize,
+    pub tool_calls: BTreeMap<String, u32>,
+    pub tool_failures: BTreeMap<String, u32>,
+    pub tokens: TokenTotals,
+    pub changes: FileChanges,
+}
+
+/// Everything the delegated tier adds up to.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DelegatedTotals {
+    pub records: usize,
+    pub assistant_turns: usize,
+    pub tool_calls: BTreeMap<String, u32>,
+    pub tool_failures: BTreeMap<String, u32>,
+    pub tokens: TokenTotals,
+    pub changes: FileChanges,
+}
+
+/// Work the session handed to subagents, reported as its own tier.
+///
+/// Deliberately **not** folded into the parent's totals. Burying delegated
+/// cost inside the parent hides the number a reader most wants to see — one
+/// corpus spawn ran 48 tool calls and 25k output tokens behind a single
+/// `Agent` call in the parent. So the parent's numbers stay exactly what they
+/// always were, this tier stands beside them, and the report draws an explicit
+/// combined line from [`Summary::combined_tool_calls`] and its siblings.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Delegation {
+    pub spawns: Vec<Spawn>,
+    /// `Agent` calls in the parent with no transcript to join to. The work
+    /// happened and kagviz cannot see it — an unknown, reported rather than
+    /// left to look like nothing.
+    pub unjoined_spawns: usize,
+    /// Records lifted out of the parent's counts because they were subagent
+    /// turns an older CLI inlined (`isSidechain`). Reported so the move is
+    /// visible rather than silent.
+    pub inline_records: usize,
+    pub totals: DelegatedTotals,
+}
+
+impl Delegation {
+    pub fn is_empty(&self) -> bool {
+        self.spawns.is_empty() && self.unjoined_spawns == 0
+    }
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Summary {
@@ -389,6 +504,9 @@ pub struct Summary {
     pub phases: Vec<Phase>,
     /// Every moment the user was involved, in transcript order.
     pub user_involvement: Vec<Involvement>,
+    /// Work handed to subagents. A separate tier, never merged into the
+    /// numbers above — see [`Delegation`].
+    pub delegation: Delegation,
 }
 
 impl Summary {
@@ -418,6 +536,27 @@ impl Summary {
     pub fn dominant_phase(&self) -> Option<PhaseKind> {
         self.phase_rollup().first().map(|(kind, _, _)| *kind)
     }
+
+    /// Tool calls by this session *and* everything it delegated.
+    ///
+    /// The combined line is a method rather than a serialized field, following
+    /// `total_tool_calls`: the facts carry each tier once, and a sum anyone can
+    /// recompute is not a separate fact. What is not optional is *showing* it —
+    /// making a reader add two numbers to learn what the session cost is the
+    /// same failure as hiding one of them.
+    pub fn combined_tool_calls(&self) -> u32 {
+        self.total_tool_calls() + self.delegation.totals.tool_calls.values().sum::<u32>()
+    }
+
+    pub fn combined_tool_failures(&self) -> u32 {
+        self.total_tool_failures() + self.delegation.totals.tool_failures.values().sum::<u32>()
+    }
+
+    /// Output tokens across both tiers. Tokens add across concurrent agents
+    /// where seconds do not, which is why there is no combined active time.
+    pub fn combined_output_tokens(&self) -> u64 {
+        self.tokens.output + self.delegation.totals.tokens.output
+    }
 }
 
 /// Tools that routinely change files without exposing a diff kagviz can read.
@@ -425,7 +564,17 @@ fn may_edit_opaquely(tool: &str) -> bool {
     matches!(tool, "Bash" | "PowerShell")
 }
 
-pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summary {
+/// Count a session.
+///
+/// `subagents` are the session's already-read `subagents/agent-*.jsonl`
+/// sidecars. They are passed in rather than read here so this stays a pure
+/// function of bytes the caller supplies — the property the whole facts
+/// contract rests on. Callers with none pass `&[]`.
+pub fn summarize(
+    paths: Option<&SessionPaths>,
+    transcript: &Transcript,
+    subagents: &[Subagent],
+) -> Summary {
     let records = &transcript.records;
     let mut s = Summary {
         skipped_lines: transcript.skipped,
@@ -439,12 +588,31 @@ pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summa
     let mut tool_names: BTreeMap<String, String> = BTreeMap::new();
     let mut stamps: Vec<DateTime<Utc>> = Vec::new();
     let mut events: Vec<Event> = Vec::new();
-    let mut changed_files: BTreeSet<String> = BTreeSet::new();
+    let mut tally = ChangeTally::default();
     // AskUserQuestion tool_use id -> the involvement entries it produced, so
     // the answers on its result can be filled in when they arrive.
     let mut open_questions: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    // `Agent` tool_use id -> the `subagent_type` it was asked for, so a spawn's
+    // own transcript can be joined back to what the parent wanted from it.
+    let mut agent_calls: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let mut agent_call_total = 0usize;
+    // agentId -> what the parent's `Agent` result says about that spawn.
+    let mut spawn_meta: BTreeMap<String, SpawnMeta> = BTreeMap::new();
+    // Subagent turns an older CLI inlined into this file, grouped by agent.
+    let mut inline: BTreeMap<String, Vec<&Record>> = BTreeMap::new();
 
     for rec in records {
+        // A sidechain record is a subagent's turn, not the parent's. It is
+        // lifted out here — before it can reach a count, an event or a phase —
+        // and reported in the delegated tier instead. Newer CLI versions write
+        // sidecar files and never take this branch.
+        if rec.is_sidechain.unwrap_or(false) {
+            inline
+                .entry(rec.agent_id.clone().unwrap_or_default())
+                .or_default()
+                .push(rec);
+            continue;
+        }
         let at = rec.timestamp.as_deref().and_then(parse_stamp);
         let mut event = Event {
             at,
@@ -508,6 +676,16 @@ pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summa
                     "Skill" => push_input_str(&mut s.skills, block.input.as_ref(), "skill"),
                     "Agent" | "Task" => {
                         push_input_str(&mut s.subagents, block.input.as_ref(), "subagent_type");
+                        agent_call_total += 1;
+                        if let Some(id) = &block.id {
+                            let kind = block
+                                .input
+                                .as_ref()
+                                .and_then(|i| i.get("subagent_type"))
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+                            agent_calls.insert(id.clone(), kind);
+                        }
                     }
                     _ => {}
                 }
@@ -559,11 +737,40 @@ pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summa
                         rec.tool_use_result.as_ref(),
                     );
                 }
+                // An `Agent` result names the spawn it launched. That name is
+                // the only thing joining a sidecar transcript to what the
+                // parent asked for, and to which model actually ran it.
+                if let Some(id) = &block.tool_use_id
+                    && let Some(kind) = agent_calls.remove(id)
+                    && let Some(result) = &rec.tool_use_result
+                    && let Some(agent_id) = result.get("agentId").and_then(Value::as_str)
+                {
+                    spawn_meta.insert(
+                        agent_id.to_string(),
+                        SpawnMeta {
+                            subagent_type: kind,
+                            description: result
+                                .get("description")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            model: result
+                                .get("resolvedModel")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                        },
+                    );
+                }
             }
         }
 
         if let Some(result) = &rec.tool_use_result {
-            tally_changes(result, &mut s.changes, &mut changed_files);
+            // The tally is keyed by tool, and the name lives on the *call*, so
+            // it is joined through `tool_use_id` exactly as failures are. A
+            // result whose call is not in this file reads as `<unknown>`,
+            // which still gets the default adapter — the same reading it got
+            // before there was a table.
+            let (tool, failed) = result_call(rec, &tool_names).unwrap_or(("<unknown>", false));
+            tally.absorb(tool, result, failed);
         }
 
         if event.at.is_some() {
@@ -571,15 +778,17 @@ pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summa
         }
     }
 
-    // Opaque edits: shell tools that ran at all. Counted as "could have
-    // changed files unseen", never as changes.
-    s.changes.opaque_edits = s
-        .tool_calls
-        .iter()
-        .filter(|(name, _)| may_edit_opaquely(name))
-        .map(|(_, n)| *n as usize)
-        .sum();
-    s.changes.files_touched = changed_files.len();
+    // Shell tools that ran at all. Counted as "could have changed files
+    // unseen", never as changes. Every one of them is opaque by construction,
+    // so they are added from the call tally rather than from results — an
+    // interrupted `Bash` leaves no result and is still an edit kagviz cannot
+    // see.
+    for (name, n) in &s.tool_calls {
+        if may_edit_opaquely(name) {
+            tally.opaque(name, *n as usize);
+        }
+    }
+    s.changes = tally.finish();
 
     s.skills.sort();
     s.skills.dedup();
@@ -589,14 +798,11 @@ pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summa
     if let (Some(first), Some(last)) = (stamps.first(), stamps.last()) {
         s.started = Some(*first);
         s.ended = Some(*last);
-        s.wall_secs = (*last - *first).num_seconds();
-        s.idle_secs = stamps
-            .windows(2)
-            .map(|w| (w[1] - w[0]).num_seconds())
-            .filter(|gap| *gap >= IDLE_GAP_SECS)
-            .sum();
+        (s.wall_secs, s.idle_secs) = wall_and_idle(&stamps);
         s.active_secs = s.wall_secs - s.idle_secs;
     }
+
+    s.delegation = build_delegation(subagents, &inline, &spawn_meta, agent_call_total);
 
     // Records are appended in order, but a transcript that merged two writers
     // need not be sorted; the series is built from time, not from file order.
@@ -610,6 +816,209 @@ pub fn summarize(paths: Option<&SessionPaths>, transcript: &Transcript) -> Summa
     s.phases = build_phases(&events, &times, &ranges);
 
     s
+}
+
+/// What the parent's `Agent` call and result say about one spawn.
+#[derive(Debug, Default, Clone)]
+struct SpawnMeta {
+    subagent_type: Option<String>,
+    description: Option<String>,
+    model: Option<String>,
+}
+
+/// The tool a result record belongs to, and whether that call errored.
+///
+/// The name lives on the *call*, so it is joined through `tool_use_id` exactly
+/// as a failure is. A result whose call is not in this file has no name here,
+/// and the caller decides what to do about that.
+fn result_call<'a>(rec: &Record, names: &'a BTreeMap<String, String>) -> Option<(&'a str, bool)> {
+    rec.message
+        .as_ref()
+        .map(|m| m.content.blocks())
+        .unwrap_or_default()
+        .iter()
+        .filter(|b| b.kind == "tool_result")
+        .find_map(|b| {
+            let name = b.tool_use_id.as_ref().and_then(|id| names.get(id))?;
+            Some((name.as_str(), b.is_error.unwrap_or(false)))
+        })
+}
+
+/// Wall span and idle seconds over *sorted* timestamps, by [`IDLE_GAP_SECS`].
+///
+/// Shared by the session and by each spawn so "active" means one thing in the
+/// document. A subagent left waiting on a slow tool is idle for the same
+/// reason a session left waiting on a user is.
+fn wall_and_idle(stamps: &[DateTime<Utc>]) -> (i64, i64) {
+    let (Some(first), Some(last)) = (stamps.first(), stamps.last()) else {
+        return (0, 0);
+    };
+    let wall = (*last - *first).num_seconds();
+    let idle = stamps
+        .windows(2)
+        .map(|w| (w[1] - w[0]).num_seconds())
+        .filter(|gap| *gap >= IDLE_GAP_SECS)
+        .sum();
+    (wall, idle)
+}
+
+/// Assemble the delegated tier from both shapes a spawn can arrive in.
+///
+/// Sidecar files are the current format; `inline` holds the groups lifted out
+/// of the parent for the older `isSidechain` one. Both produce the same
+/// [`Spawn`], so nothing downstream has to know which era a transcript is from.
+fn build_delegation(
+    subagents: &[Subagent],
+    inline: &BTreeMap<String, Vec<&Record>>,
+    meta: &BTreeMap<String, SpawnMeta>,
+    agent_call_total: usize,
+) -> Delegation {
+    let mut d = Delegation::default();
+
+    let mut tier = ChangeTally::default();
+
+    for sub in subagents {
+        let records: Vec<&Record> = sub.transcript.records.iter().collect();
+        let (mut spawn, tally) = summarize_spawn(&records, sub.transcript.skipped, true);
+        if spawn.agent_id.is_none() {
+            spawn.agent_id.clone_from(&sub.agent_id);
+        }
+        tier.merge(&tally);
+        d.spawns.push(spawn);
+    }
+    for (agent_id, records) in inline {
+        d.inline_records += records.len();
+        let (mut spawn, tally) = summarize_spawn(records, 0, false);
+        if spawn.agent_id.is_none() && !agent_id.is_empty() {
+            spawn.agent_id = Some(agent_id.clone());
+        }
+        tier.merge(&tally);
+        d.spawns.push(spawn);
+    }
+
+    for spawn in &mut d.spawns {
+        if let Some(m) = spawn.agent_id.as_deref().and_then(|id| meta.get(id)) {
+            spawn.subagent_type.clone_from(&m.subagent_type);
+            spawn.description.clone_from(&m.description);
+            spawn.model.clone_from(&m.model);
+        }
+    }
+    // Stable order regardless of how the filesystem enumerated the sidecars.
+    d.spawns
+        .sort_by(|a, b| (&a.started, &a.agent_id).cmp(&(&b.started, &b.agent_id)));
+
+    // Every `Agent` call the parent made that no transcript accounts for. The
+    // work happened; kagviz cannot see it. Saying nothing would render it as
+    // no cost at all, which is the exact failure this document exists to avoid.
+    d.unjoined_spawns = agent_call_total.saturating_sub(d.spawns.len());
+
+    let t = &mut d.totals;
+    for spawn in &d.spawns {
+        t.records += spawn.records;
+        t.assistant_turns += spawn.assistant_turns;
+        for (name, n) in &spawn.tool_calls {
+            *t.tool_calls.entry(name.clone()).or_default() += n;
+        }
+        for (name, n) in &spawn.tool_failures {
+            *t.tool_failures.entry(name.clone()).or_default() += n;
+        }
+        t.tokens.input += spawn.tokens.input;
+        t.tokens.output += spawn.tokens.output;
+        t.tokens.thinking += spawn.tokens.thinking;
+        t.tokens.cache_read += spawn.tokens.cache_read;
+        t.tokens.cache_write += spawn.tokens.cache_write;
+    }
+    t.changes = tier.finish();
+    d
+}
+
+/// Count one delegated agent's records.
+///
+/// A compact pass rather than a recursive [`summarize`]: a subagent has no user
+/// turns, so phases, the activity strip and user involvement are all vacuous
+/// for it, and carrying them would multiply the size of the facts document for
+/// no reader. What a spawn has is cost and output, and that is what is kept.
+fn summarize_spawn(records: &[&Record], skipped: usize, sidecar: bool) -> (Spawn, ChangeTally) {
+    let mut spawn = Spawn {
+        sidecar,
+        records: records.len(),
+        skipped_lines: skipped,
+        ..Spawn::default()
+    };
+    let mut tool_names: BTreeMap<String, String> = BTreeMap::new();
+    let mut tally = ChangeTally::default();
+    let mut stamps: Vec<DateTime<Utc>> = Vec::new();
+
+    for rec in records {
+        if spawn.agent_id.is_none() {
+            spawn.agent_id.clone_from(&rec.agent_id);
+        }
+        if let Some(at) = rec.timestamp.as_deref().and_then(parse_stamp) {
+            stamps.push(at);
+        }
+
+        if rec.kind == "assistant"
+            && let Some(msg) = &rec.message
+        {
+            spawn.assistant_turns += 1;
+            if let Some(u) = msg.usage {
+                spawn.tokens.input += u.input_tokens;
+                spawn.tokens.output += u.output_tokens;
+                spawn.tokens.thinking += u.output_tokens_details.thinking_tokens;
+                spawn.tokens.cache_read += u.cache_read_input_tokens;
+                spawn.tokens.cache_write += u.cache_creation_input_tokens;
+            }
+            for block in msg.content.blocks() {
+                if block.kind != "tool_use" {
+                    continue;
+                }
+                let Some(name) = block.name.clone() else {
+                    continue;
+                };
+                *spawn.tool_calls.entry(name.clone()).or_default() += 1;
+                if let Some(id) = &block.id {
+                    tool_names.insert(id.clone(), name);
+                }
+            }
+        }
+
+        if rec.kind == "user"
+            && let Some(msg) = &rec.message
+        {
+            for block in msg.content.blocks() {
+                if block.kind == "tool_result" && block.is_error.unwrap_or(false) {
+                    let name = block
+                        .tool_use_id
+                        .as_ref()
+                        .and_then(|id| tool_names.get(id))
+                        .cloned()
+                        .unwrap_or_else(|| "<unknown>".to_string());
+                    *spawn.tool_failures.entry(name).or_default() += 1;
+                }
+            }
+        }
+
+        if let Some(result) = &rec.tool_use_result {
+            let (tool, failed) = result_call(rec, &tool_names).unwrap_or(("<unknown>", false));
+            tally.absorb(tool, result, failed);
+        }
+    }
+
+    for (name, n) in &spawn.tool_calls {
+        if may_edit_opaquely(name) {
+            tally.opaque(name, *n as usize);
+        }
+    }
+    spawn.changes = tally.finish();
+
+    stamps.sort_unstable();
+    if let (Some(first), Some(last)) = (stamps.first(), stamps.last()) {
+        spawn.started = Some(*first);
+        spawn.ended = Some(*last);
+        let (wall, idle) = wall_and_idle(&stamps);
+        spawn.active_secs = wall - idle;
+    }
+    (spawn, tally)
 }
 
 /// One record's contribution to the activity series and the phase cut.
@@ -965,16 +1374,81 @@ fn parse_stamp(raw: &str) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
-/// Recover line deltas from a tool result that carries a `structuredPatch`.
+/// A file change read out of one tool result.
 ///
-/// A `create` result has an empty patch and the whole file in `content`, so
-/// its line count is the addition.
-fn tally_changes(result: &Value, changes: &mut FileChanges, files: &mut BTreeSet<String>) {
-    let Some(patch) = result.get("structuredPatch") else {
-        return;
+/// The two halves are recovered *independently*, because the corpus contains
+/// results that carry one without the other: a file server can report
+/// `{"applied":true,"files":[…]}` with no `diff` at all, naming exactly which
+/// files it changed while saying nothing about how much. Collapsing that to
+/// "unreadable" throws away a fact the transcript actually holds.
+#[derive(Debug, Default)]
+struct Recovered {
+    /// Files the tool said it changed, as *it* identified them. Absolute for
+    /// the built-in editors; usually root-relative for an MCP file server,
+    /// which may not even be describing a file on this host.
+    files: Vec<String>,
+    added: usize,
+    deleted: usize,
+    /// Whether `added`/`deleted` are a reading or merely a default.
+    ///
+    /// `false` means the tool named its files but handed over no diff: the
+    /// files are exact and the line counts are unknown, so the call still owes
+    /// `opaque_edits` an entry even though it contributed to `files_touched`.
+    lines_known: bool,
+}
+
+/// The adapter table: which reader to try against a tool's result payload.
+///
+/// Keyed by tool name rather than written as one branching code path, because
+/// the shapes differ genuinely — `Edit` hands over parsed hunks, a file-serving
+/// MCP tool hands over a unified diff inside a JSON envelope. A tool with no
+/// adapter is not a bug: it is an honest `opaque_edits`.
+///
+/// Returning `Some(Recovered::default())` is meaningful and distinct from
+/// `None`. It says "this call was read, and it changed nothing" — a refused
+/// edit is a known zero, not an unknown.
+fn recover_changes(tool: &str, result: &Value) -> Option<Recovered> {
+    if is_mcp_file_edit(tool) {
+        from_diff_envelope(result)
+    } else {
+        from_structured_patch(result)
+    }
+}
+
+/// Tools that change files, and therefore owe the document a number.
+///
+/// A result kagviz cannot read from one of these is an *unknown*, not a zero —
+/// so it lands in `opaque_edits`. Today every unreadable `Edit` result in the
+/// corpus is a failed one (which changed nothing, and is already visible in
+/// `tool_failures`), so this guard costs nothing now. It exists because the
+/// format drifts: the day `Edit` grows a result shape kagviz has not been
+/// taught, the number must go visibly missing rather than quietly to zero.
+fn edits_files(tool: &str) -> bool {
+    matches!(tool, "Edit" | "MultiEdit" | "Write" | "NotebookEdit") || is_mcp_file_edit(tool)
+}
+
+/// An MCP tool whose operation edits files, by the same exact-match rule
+/// [`classify_tool`] uses. A new file server gets an adapter for free; a
+/// tracker with an `update_*` operation does not get mistaken for one.
+fn is_mcp_file_edit(tool: &str) -> bool {
+    tool.strip_prefix("mcp__").is_some_and(|rest| {
+        let op = rest.rsplit("__").next().unwrap_or(rest);
+        MCP_FILE_EDIT_OPS.contains(&op)
+    })
+}
+
+/// `Edit`, `Write`, `NotebookEdit`: real unified-diff hunks, already parsed.
+///
+/// A `create` result has an empty patch and the whole file body in `content`,
+/// so its line count is the addition.
+fn from_structured_patch(result: &Value) -> Option<Recovered> {
+    let patch = result.get("structuredPatch")?;
+    let mut out = Recovered {
+        lines_known: true,
+        ..Recovered::default()
     };
     if let Some(path) = result.get("filePath").and_then(Value::as_str) {
-        files.insert(path.to_string());
+        out.files.push(path.to_string());
     }
 
     let mut saw_hunk = false;
@@ -986,8 +1460,8 @@ fn tally_changes(result: &Value, changes: &mut FileChanges, files: &mut BTreeSet
             saw_hunk = true;
             for line in lines.iter().filter_map(Value::as_str) {
                 match line.as_bytes().first() {
-                    Some(b'+') => changes.lines_added += 1,
-                    Some(b'-') => changes.lines_deleted += 1,
+                    Some(b'+') => out.added += 1,
+                    Some(b'-') => out.deleted += 1,
                     _ => {}
                 }
             }
@@ -998,7 +1472,192 @@ fn tally_changes(result: &Value, changes: &mut FileChanges, files: &mut BTreeSet
         && result.get("type").and_then(Value::as_str) == Some("create")
         && let Some(body) = result.get("content").and_then(Value::as_str)
     {
-        changes.lines_added += body.lines().count();
+        out.added = body.lines().count();
+    }
+    Some(out)
+}
+
+/// A file-serving MCP tool that returns its own unified diff.
+///
+/// Measured shape (`mcp__kaed-*__edit`): `toolUseResult` is a JSON **string**,
+/// not an object, holding
+/// `{"applied":true,"diff":"--- a/x\n+++ b/x\n@@ …","files":[{"path":"x"}]}`.
+/// A bare object is accepted too, so a server that returns structured content
+/// reads the same way.
+fn from_diff_envelope(result: &Value) -> Option<Recovered> {
+    let parsed;
+    let envelope = match result {
+        Value::String(raw) => {
+            parsed = serde_json::from_str::<Value>(raw).ok()?;
+            &parsed
+        }
+        other => other,
+    };
+
+    // An edit the server refused changed nothing, and kagviz knows that
+    // exactly. Reporting it as opaque would manufacture an unknown.
+    if envelope.get("applied").and_then(Value::as_bool) == Some(false) {
+        return Some(Recovered {
+            lines_known: true,
+            ..Recovered::default()
+        });
+    }
+
+    let files: Vec<String> = envelope
+        .get("files")
+        .and_then(Value::as_array)
+        .map(|fs| {
+            fs.iter()
+                .filter_map(|f| f.get("path").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Measured on the cleo corpus: 16 results are `{"applied":true,"files":[…]}`
+    // with no `diff` — the edit landed and named its files, and only the line
+    // counts are missing. Take the files; leave the lines visibly unknown.
+    let Some(diff) = envelope.get("diff").and_then(Value::as_str) else {
+        return (!files.is_empty()).then(|| Recovered {
+            files,
+            ..Recovered::default()
+        });
+    };
+    let (added, deleted) = count_unified(diff);
+    Some(Recovered {
+        files,
+        added,
+        deleted,
+        lines_known: true,
+    })
+}
+
+/// Count added and deleted lines in a unified diff.
+///
+/// Only lines *inside* a hunk are counted, which is what keeps a deleted line
+/// whose own content is `--` from reading as a `---` file header. The header
+/// pair is matched as a pair, and as a path (`--- a/x`, so byte 3 is a space)
+/// rather than as a prefix, for the same reason: markdown is full of `---`.
+fn count_unified(diff: &str) -> (usize, usize) {
+    let is_header = |line: &str, marker: u8| {
+        line.len() > 4 && line.as_bytes()[..3] == [marker; 3] && line.as_bytes()[3] == b' '
+    };
+    let (mut added, mut deleted) = (0, 0);
+    let mut in_hunk = false;
+    let mut lines = diff.lines().peekable();
+    while let Some(line) = lines.next() {
+        if is_header(line, b'-') && lines.peek().is_some_and(|n| is_header(n, b'+')) {
+            lines.next();
+            in_hunk = false;
+            continue;
+        }
+        if line.starts_with("@@") {
+            in_hunk = true;
+            continue;
+        }
+        if !in_hunk {
+            continue;
+        }
+        match line.as_bytes().first() {
+            Some(b'+') => added += 1,
+            Some(b'-') => deleted += 1,
+            _ => {}
+        }
+    }
+    (added, deleted)
+}
+
+/// Accumulates the file-change picture over a pass of records.
+///
+/// Holds the per-tool path sets that `FileChanges` only carries counts of, so
+/// the same tool editing one file twice is one file in both totals.
+#[derive(Debug, Default)]
+struct ChangeTally {
+    changes: FileChanges,
+    files: BTreeSet<String>,
+    by_tool_files: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl ChangeTally {
+    /// Read one tool result. A tool that could have edited and gave nothing
+    /// readable is counted as opaque; one that is not an editor at all is not
+    /// counted here in either direction.
+    ///
+    /// `failed` is the call's own `is_error`. A refused edit changed nothing
+    /// and is a known zero — counting it as opaque would manufacture an
+    /// unknown out of the one case kagviz is certain about.
+    fn absorb(&mut self, tool: &str, result: &Value, failed: bool) {
+        match recover_changes(tool, result) {
+            Some(rec) => {
+                let slot = self.changes.by_tool.entry(tool.to_string()).or_default();
+                slot.calls += 1;
+                slot.lines_added += rec.added;
+                slot.lines_deleted += rec.deleted;
+                self.changes.lines_added += rec.added;
+                self.changes.lines_deleted += rec.deleted;
+                let seen = self.by_tool_files.entry(tool.to_string()).or_default();
+                for f in rec.files {
+                    seen.insert(f.clone());
+                    self.files.insert(f);
+                }
+                // Files known, lines not: the call still owes `opaque_edits` an
+                // entry, or `lines_added` would read as a total when it is a
+                // floor. The two halves are tracked separately for exactly this.
+                if !rec.lines_known {
+                    slot.opaque += 1;
+                    self.changes.opaque_edits += 1;
+                }
+            }
+            None if edits_files(tool) && !failed => self.opaque(tool, 1),
+            None => {}
+        }
+    }
+
+    /// Record `n` calls of a tool that changes files with nothing to read.
+    fn opaque(&mut self, tool: &str, n: usize) {
+        let slot = self.changes.by_tool.entry(tool.to_string()).or_default();
+        slot.calls += n;
+        slot.opaque += n;
+        self.changes.opaque_edits += n;
+    }
+
+    /// Absorb another pass's tally.
+    ///
+    /// Totals the delegated tier by merging the *sets*, not the counts: two
+    /// spawns that edited the same file changed one file between them, and
+    /// adding their `files_touched` would report two.
+    fn merge(&mut self, other: &ChangeTally) {
+        self.changes.lines_added += other.changes.lines_added;
+        self.changes.lines_deleted += other.changes.lines_deleted;
+        self.changes.opaque_edits += other.changes.opaque_edits;
+        for (tool, c) in &other.changes.by_tool {
+            let slot = self.changes.by_tool.entry(tool.clone()).or_default();
+            slot.calls += c.calls;
+            slot.lines_added += c.lines_added;
+            slot.lines_deleted += c.lines_deleted;
+            slot.opaque += c.opaque;
+        }
+        self.files.extend(other.files.iter().cloned());
+        for (tool, files) in &other.by_tool_files {
+            self.by_tool_files
+                .entry(tool.clone())
+                .or_default()
+                .extend(files.iter().cloned());
+        }
+    }
+
+    /// The finished picture. Borrows rather than consumes, so one pass's tally
+    /// can be both reported and merged into a larger one.
+    fn finish(&self) -> FileChanges {
+        let mut out = self.changes.clone();
+        out.files_touched = self.files.len();
+        for (tool, files) in &self.by_tool_files {
+            if let Some(slot) = out.by_tool.get_mut(tool) {
+                slot.files_touched = files.len();
+            }
+        }
+        out.by_tool.retain(|_, c| c.calls > 0);
+        out
     }
 }
 
@@ -1034,7 +1693,7 @@ mod tests {
             r#"{"type":"assistant","timestamp":"2026-08-20T12:01:30.000Z","message":{
                 "content":[{"type":"tool_use","id":"t3","name":"Bash"}]}}"#,
         ]);
-        let s = summarize(None, &t);
+        let s = summarize(None, &t, &[]);
         assert_eq!(s.phases.len(), 3);
         assert_eq!(s.activity.spans.len(), 2);
 
@@ -1083,7 +1742,7 @@ mod tests {
             r#"{"type":"user","timestamp":"2026-08-20T10:00:30.600Z","message":{
                 "content":"d"}}"#,
         ]);
-        let s = summarize(None, &t);
+        let s = summarize(None, &t, &[]);
         assert_eq!(s.phases.len(), 4);
         assert_eq!(s.activity.spans.len(), 1);
         assert_eq!(
@@ -1108,7 +1767,7 @@ mod tests {
         };
 
         let mut lines = reads(9);
-        let s = summarize(None, &transcript(&lines));
+        let s = summarize(None, &transcript(&lines), &[]);
         assert_eq!(s.phases[0].kind, PhaseKind::Exploring);
         assert_eq!(s.phases[0].mix.read, 9);
 
@@ -1116,7 +1775,7 @@ mod tests {
                 "content":[{"type":"tool_use","name":"Edit"}]}}"#;
 
         lines.push(edit);
-        let s = summarize(None, &transcript(&lines));
+        let s = summarize(None, &transcript(&lines), &[]);
         assert_eq!(s.phases[0].mix.edit, 1);
         assert_eq!(
             s.phases[0].kind,
@@ -1125,7 +1784,7 @@ mod tests {
         );
 
         lines.push(edit);
-        let s = summarize(None, &transcript(&lines));
+        let s = summarize(None, &transcript(&lines), &[]);
         assert_eq!(
             s.phases[0].kind,
             PhaseKind::Implementing,
@@ -1143,7 +1802,7 @@ mod tests {
             r#"{"type":"assistant","timestamp":"2026-08-20T10:00:20.000Z","message":{
                 "content":[{"type":"text","text":"it counts records"}]}}"#,
         ]);
-        let s = summarize(None, &t);
+        let s = summarize(None, &t, &[]);
         assert_eq!(s.phases.len(), 1);
         assert_eq!(s.phases[0].kind, PhaseKind::Discussing);
         assert_eq!(s.phases[0].mix.total(), 0);
@@ -1175,7 +1834,7 @@ mod tests {
                     {"type":"tool_use","name":"mcp__korg__update_proposal"},
                     {"type":"tool_use","name":"Read"}]}}"#,
         ]);
-        let s = summarize(None, &t);
+        let s = summarize(None, &t, &[]);
         assert_eq!(s.phases[0].kind, PhaseKind::Filing);
         assert_eq!(s.phases[0].mix.org, 3);
         assert_eq!(s.phases[0].mix.read, 1);
@@ -1199,7 +1858,7 @@ mod tests {
             r#"{"type":"assistant","timestamp":"2026-08-20T10:01:25.000Z","message":{
                 "content":[{"type":"tool_use","name":"Read"}]}}"#,
         ]);
-        let s = summarize(None, &t);
+        let s = summarize(None, &t, &[]);
         let rollup = s.phase_rollup();
         // one implementing phase (70s, up to the next user turn) against two
         // exploring phases (10s and 5s)
@@ -1221,7 +1880,7 @@ mod tests {
             r#"{"type":"user","timestamp":"2026-08-20T12:00:30.000Z"}"#,
             r#"{"type":"assistant","timestamp":"2026-08-20T12:00:40.000Z"}"#,
         ]);
-        let s = summarize(None, &t);
+        let s = summarize(None, &t, &[]);
         assert_eq!(s.wall_secs, 7240);
         assert_eq!(s.idle_secs, 7200);
         assert_eq!(s.active_secs, 40);
@@ -1237,7 +1896,7 @@ mod tests {
                 {"type":"tool_result","tool_use_id":"t1","is_error":true},
                 {"type":"tool_result","tool_use_id":"t2"}]}}"#,
         ]);
-        let s = summarize(None, &t);
+        let s = summarize(None, &t, &[]);
         assert_eq!(s.total_tool_calls(), 2);
         assert_eq!(s.total_tool_failures(), 1);
         assert_eq!(s.tool_failures.get("Bash"), Some(&1));
@@ -1253,7 +1912,7 @@ mod tests {
             r#"{"type":"user","promptId":"p1","message":{"content":[
                 {"type":"tool_result","tool_use_id":"t1"}]}}"#,
         ]);
-        assert_eq!(summarize(None, &t).user_prompts, 2);
+        assert_eq!(summarize(None, &t, &[]).user_prompts, 2);
     }
 
     /// `promptId` rides on harness-injected records too, so it cannot be the
@@ -1272,7 +1931,7 @@ mod tests {
             r#"{"type":"user","promptId":"p1","message":{"content":[
                 {"type":"text","text":"<system-reminder>be good</system-reminder>"}]}}"#,
         ]);
-        assert_eq!(summarize(None, &t).user_prompts, 0);
+        assert_eq!(summarize(None, &t, &[]).user_prompts, 0);
     }
 
     #[test]
@@ -1284,7 +1943,7 @@ mod tests {
             r#"{"type":"user","promptId":"p2","message":{"content":[
                 {"type":"document","source":{}}]}}"#,
         ]);
-        let s = summarize(None, &t);
+        let s = summarize(None, &t, &[]);
         assert_eq!(s.user_prompts, 2);
         assert_eq!(s.pasted_attachments, 2);
     }
@@ -1297,19 +1956,342 @@ mod tests {
             r#"{"type":"user","toolUseResult":{"filePath":"/b.rs","type":"create",
                 "structuredPatch":[],"content":"one\ntwo\nthree"}}"#,
         ]);
-        let s = summarize(None, &t);
+        let s = summarize(None, &t, &[]);
         assert_eq!(s.changes.lines_added, 5);
         assert_eq!(s.changes.lines_deleted, 1);
         assert_eq!(s.changes.files_touched, 2);
+    }
+
+    /// The adapter table's second entry. A file-serving MCP tool returns its
+    /// own unified diff, wrapped in a JSON *string* rather than an object —
+    /// measured shape, `mcp__kaed-kai__edit`. Before the table these calls were
+    /// invisible in both directions: not in the deltas, and not in
+    /// `opaque_edits` either, because only `Bash` was ever named as opaque.
+    #[test]
+    fn a_returned_unified_diff_is_recovered_rather_than_left_opaque() {
+        let envelope = r#"{\"applied\":true,\"diff\":\"--- a/m.yml\\n+++ b/m.yml\\n@@ -1,3 +1,4 @@\\n ctx\\n-gone\\n+one\\n+two\\n\",\"files\":[{\"path\":\"m.yml\"}]}"#;
+        let t = transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "content":[{"type":"tool_use","id":"t1","name":"mcp__kaed-kai__edit"}]}}"#,
+            &format!(
+                r#"{{"type":"user","timestamp":"2026-08-20T10:00:05.000Z","toolUseResult":"{envelope}",
+                "message":{{"content":[{{"type":"tool_result","tool_use_id":"t1"}}]}}}}"#
+            ),
+        ]);
+        let s = summarize(None, &t, &[]);
+        assert_eq!(s.changes.lines_added, 2);
+        assert_eq!(s.changes.lines_deleted, 1);
+        assert_eq!(s.changes.files_touched, 1);
+        assert_eq!(s.changes.opaque_edits, 0);
+
+        let by = &s.changes.by_tool["mcp__kaed-kai__edit"];
+        assert_eq!((by.calls, by.opaque, by.lines_added), (1, 0, 2));
+    }
+
+    /// An edit the server refused changed nothing, and kagviz knows that
+    /// exactly. Calling it opaque would manufacture an unknown out of the one
+    /// case there is no doubt about.
+    #[test]
+    fn a_refused_edit_is_a_known_zero_not_an_unknown() {
+        let t = transcript(&[
+            r#"{"type":"assistant","message":{
+                "content":[{"type":"tool_use","id":"t1","name":"mcp__kaed-kai__edit"}]}}"#,
+            r#"{"type":"user","toolUseResult":"{\"applied\":false}",
+                "message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]}}"#,
+        ]);
+        let s = summarize(None, &t, &[]);
+        assert_eq!(s.changes.opaque_edits, 0);
+        assert_eq!(s.changes.lines_added, 0);
+        assert_eq!(s.changes.by_tool["mcp__kaed-kai__edit"].calls, 1);
+    }
+
+    /// Found in the cleo corpus, not by reasoning: 16 kaed results are
+    /// `{"applied":true,"files":[…]}` with **no `diff`**. The edit landed and
+    /// named its files exactly; only the line counts are missing.
+    ///
+    /// Both halves have to be reported honestly at once — take the files
+    /// (they are exact, and dropping them under-reported `files_touched` by 36
+    /// paths corpus-wide), and still charge `opaque_edits`, because otherwise
+    /// `lines_added` reads as a total when it is a floor.
+    #[test]
+    fn a_result_naming_files_without_a_diff_yields_files_and_an_unknown() {
+        let envelope = r#"{\"applied\":true,\"files\":[{\"path\":\"a.rs\"},{\"path\":\"b.rs\"}],\"txn_id\":101}"#;
+        let t = transcript(&[
+            r#"{"type":"assistant","message":{
+                "content":[{"type":"tool_use","id":"t1","name":"mcp__kaed-kai__edit"}]}}"#,
+            &format!(
+                r#"{{"type":"user","toolUseResult":"{envelope}",
+                "message":{{"content":[{{"type":"tool_result","tool_use_id":"t1"}}]}}}}"#
+            ),
+        ]);
+        let s = summarize(None, &t, &[]);
+        assert_eq!(
+            s.changes.files_touched, 2,
+            "the files are exact — keep them"
+        );
+        assert_eq!(s.changes.lines_added, 0);
+        assert_eq!(
+            s.changes.opaque_edits, 1,
+            "lines are unknown, so the line counts must not read as a total"
+        );
+
+        // The audit surface has to show both at once, or a reader cannot tell
+        // that `files_touched` is exact while `lines_added` is a floor.
+        let by = &s.changes.by_tool["mcp__kaed-kai__edit"];
+        assert_eq!((by.calls, by.opaque, by.files_touched), (1, 1, 2));
+    }
+
+    /// A tool that edits files and hands back something kagviz cannot read is
+    /// an unknown. The corpus has no such call today — every unreadable `Edit`
+    /// result in it is a failed one — so this guards the drift, not the present.
+    #[test]
+    fn an_unreadable_edit_result_is_opaque_but_a_failed_one_is_not() {
+        let t = transcript(&[
+            r#"{"type":"assistant","message":{"content":[
+                {"type":"tool_use","id":"t1","name":"Edit"},
+                {"type":"tool_use","id":"t2","name":"Edit"}]}}"#,
+            // Unreadable and did not error: kagviz cannot say it changed nothing.
+            r#"{"type":"user","toolUseResult":"some future shape",
+                "message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]}}"#,
+            // Refused: it changed nothing, and that is already in tool_failures.
+            r#"{"type":"user","toolUseResult":"Error: String to replace not found in file.",
+                "message":{"content":[{"type":"tool_result","tool_use_id":"t2","is_error":true}]}}"#,
+        ]);
+        let s = summarize(None, &t, &[]);
+        assert_eq!(s.changes.opaque_edits, 1);
+        assert_eq!(
+            s.changes.by_tool["Edit"],
+            ToolChanges {
+                calls: 1,
+                opaque: 1,
+                ..ToolChanges::default()
+            }
+        );
+        assert_eq!(s.tool_failures["Edit"], 1);
+    }
+
+    /// Markdown is full of `---`, and a deleted line whose content is `--`
+    /// arrives in a diff as `---`. Counting `+`/`-` by prefix eats it. Only
+    /// lines inside a hunk are counted, and the file-header pair is matched as
+    /// a pair of paths.
+    #[test]
+    fn a_deleted_dashes_line_is_not_mistaken_for_a_diff_header() {
+        let diff = "--- a/doc.md\n+++ b/doc.md\n@@ -1,4 +1,3 @@\n---\n-title: x\n----\n+++\n ctx\n";
+        // Three removals (`---`, `-title: x`, `----`) and one addition (`+++`).
+        assert_eq!(count_unified(diff), (1, 3));
+    }
+
+    /// A diff over several files: each header pair closes the hunk before it,
+    /// so the second file's `---`/`+++` are not counted as changed lines.
+    #[test]
+    fn a_multi_file_unified_diff_counts_each_files_hunks() {
+        let diff = "--- a/one\n+++ b/one\n@@ -1 +1,2 @@\n ctx\n+added\n\
+                    --- a/two\n+++ b/two\n@@ -1,2 +1 @@\n-gone\n ctx\n";
+        assert_eq!(count_unified(diff), (1, 1));
+    }
+
+    /// `by_tool` is the audit surface: the totals must be the parts, or it is
+    /// decoration rather than a check.
+    #[test]
+    fn the_per_tool_breakdown_adds_up_to_the_totals() {
+        let t = transcript(&[
+            r#"{"type":"assistant","message":{"content":[
+                {"type":"tool_use","id":"t1","name":"Edit"},
+                {"type":"tool_use","id":"t2","name":"Bash"},
+                {"type":"tool_use","id":"t3","name":"Bash"}]}}"#,
+            r#"{"type":"user","toolUseResult":{"filePath":"/a.rs","structuredPatch":[
+                {"lines":["+one","+two","-three"]}]},
+                "message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]}}"#,
+        ]);
+        let s = summarize(None, &t, &[]);
+        let c = &s.changes;
+        assert_eq!(
+            c.lines_added,
+            c.by_tool.values().map(|t| t.lines_added).sum::<usize>()
+        );
+        assert_eq!(
+            c.lines_deleted,
+            c.by_tool.values().map(|t| t.lines_deleted).sum::<usize>()
+        );
+        assert_eq!(
+            c.opaque_edits,
+            c.by_tool.values().map(|t| t.opaque).sum::<usize>()
+        );
+        assert_eq!(c.by_tool["Bash"].calls, 2);
+        assert_eq!(c.by_tool["Bash"].opaque, 2);
+        assert_eq!(c.by_tool["Edit"].opaque, 0);
     }
 
     #[test]
     fn shell_calls_are_reported_as_opaque_rather_than_as_no_change() {
         let t = transcript(&[r#"{"type":"assistant","message":{"content":[
                 {"type":"tool_use","id":"t1","name":"Bash"}]}}"#]);
-        let s = summarize(None, &t);
+        let s = summarize(None, &t, &[]);
         assert_eq!(s.changes.files_touched, 0);
         assert_eq!(s.changes.opaque_edits, 1);
+    }
+
+    fn subagent(agent_id: &str, lines: &[&str]) -> Subagent {
+        Subagent {
+            agent_id: Some(agent_id.to_string()),
+            transcript: transcript(lines),
+        }
+    }
+
+    /// The rollup, and the rule it is built on: delegated work is a **tier**,
+    /// not an addend. The parent's own numbers must come out of this exactly
+    /// as they went in — a session that spawned an agent still made one `Agent`
+    /// call — and the delegated cost stands beside them, with the sum spelled
+    /// out rather than left to the reader.
+    #[test]
+    fn a_subagents_work_is_a_separate_tier_and_never_moves_the_parents_numbers() {
+        let parent = transcript(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "content":"map the linking layer"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:05.000Z","message":{
+                "usage":{"output_tokens":100},
+                "content":[{"type":"tool_use","id":"t1","name":"Agent",
+                            "input":{"subagent_type":"Explore"}}]}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:40.000Z","toolUseResult":{
+                "agentId":"a1","description":"Map the linking layer",
+                "resolvedModel":"claude-opus-5"},
+                "message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]}}"#,
+        ]);
+        let spawned = subagent(
+            "a1",
+            &[
+                r#"{"type":"assistant","isSidechain":true,"agentId":"a1",
+                    "timestamp":"2026-08-20T10:00:10.000Z","message":{
+                    "usage":{"output_tokens":900},
+                    "content":[{"type":"tool_use","id":"s1","name":"Grep"},
+                               {"type":"tool_use","id":"s2","name":"Read"}]}}"#,
+                r#"{"type":"user","isSidechain":true,"agentId":"a1",
+                    "timestamp":"2026-08-20T10:00:30.000Z","message":{
+                    "content":[{"type":"tool_result","tool_use_id":"s1","is_error":true}]}}"#,
+            ],
+        );
+
+        let alone = summarize(None, &parent, &[]);
+        let s = summarize(None, &parent, std::slice::from_ref(&spawned));
+
+        // Not one number of the parent's moved because an agent was folded in.
+        assert_eq!(s.tool_calls, alone.tool_calls);
+        assert_eq!(s.tokens.output, alone.tokens.output);
+        assert_eq!(s.assistant_turns, alone.assistant_turns);
+        assert_eq!(s.phases.len(), alone.phases.len());
+        assert_eq!(s.total_tool_calls(), 1, "the parent made one Agent call");
+
+        let d = &s.delegation;
+        assert_eq!(d.spawns.len(), 1);
+        assert_eq!(d.unjoined_spawns, 0);
+        assert_eq!(d.inline_records, 0);
+
+        // Joined to the parent's Agent call, so the tier can say what it was for.
+        let spawn = &d.spawns[0];
+        assert_eq!(spawn.agent_id.as_deref(), Some("a1"));
+        assert_eq!(spawn.subagent_type.as_deref(), Some("Explore"));
+        assert_eq!(spawn.description.as_deref(), Some("Map the linking layer"));
+        assert_eq!(spawn.model.as_deref(), Some("claude-opus-5"));
+        assert!(spawn.sidecar);
+        assert_eq!(spawn.tool_calls["Grep"], 1);
+        assert_eq!(spawn.tool_failures["Grep"], 1);
+        assert_eq!(spawn.active_secs, 20);
+
+        // Two tiers, and the sum said out loud.
+        assert_eq!(d.totals.tokens.output, 900);
+        assert_eq!(s.combined_tool_calls(), 3);
+        assert_eq!(s.combined_tool_failures(), 1);
+        assert_eq!(s.combined_output_tokens(), 1000);
+    }
+
+    /// The format drift. Older CLI versions inlined subagent turns into the
+    /// main transcript with `isSidechain` instead of writing a sidecar. Those
+    /// records are *not* the parent's work, and leaving them in its counts is
+    /// the same undercount wearing the opposite sign — the parent looks like it
+    /// did the delegated work itself.
+    ///
+    /// No transcript in the kai corpus takes this branch, so this test is the
+    /// only thing holding it.
+    #[test]
+    fn inlined_sidechain_turns_are_lifted_out_of_the_parent_into_the_tier() {
+        let t = transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "usage":{"output_tokens":10},
+                "content":[{"type":"tool_use","id":"t1","name":"Task",
+                            "input":{"subagent_type":"Explore"}}]}}"#,
+            r#"{"type":"assistant","isSidechain":true,"agentId":"old1",
+                "timestamp":"2026-08-20T10:00:10.000Z","message":{
+                "usage":{"output_tokens":500},
+                "content":[{"type":"tool_use","id":"s1","name":"Bash"}]}}"#,
+            r#"{"type":"assistant","isSidechain":true,"agentId":"old1",
+                "timestamp":"2026-08-20T10:00:20.000Z","message":{
+                "content":[{"type":"tool_use","id":"s2","name":"Read"}]}}"#,
+        ]);
+        let s = summarize(None, &t, &[]);
+
+        // The parent kept its own Task call and nothing else.
+        assert_eq!(s.total_tool_calls(), 1);
+        assert_eq!(s.tool_calls["Task"], 1);
+        assert!(!s.tool_calls.contains_key("Bash"));
+        assert_eq!(s.tokens.output, 10);
+        assert_eq!(s.assistant_turns, 1);
+        // And the sidechain records never reached a phase or the strip.
+        assert_eq!(s.phases.len(), 1);
+        assert_eq!(s.phases[0].mix.run, 0);
+
+        let d = &s.delegation;
+        assert_eq!(d.inline_records, 2, "the move is reported, not silent");
+        assert_eq!(d.spawns.len(), 1);
+        assert!(!d.spawns[0].sidecar);
+        assert_eq!(d.spawns[0].agent_id.as_deref(), Some("old1"));
+        assert_eq!(d.totals.tokens.output, 500);
+        // A subagent's shell call is as opaque as the parent's.
+        assert_eq!(d.totals.changes.opaque_edits, 1);
+        assert_eq!(s.combined_tool_calls(), 3);
+    }
+
+    /// A spawn whose transcript is not on disk. The work happened; kagviz
+    /// cannot see it. Reporting zero delegated calls would read as "it
+    /// delegated nothing", which is the failure this whole document is
+    /// organised against.
+    #[test]
+    fn a_spawn_with_no_transcript_is_counted_as_unknown_not_as_nothing() {
+        let t = transcript(&[r#"{"type":"assistant","message":{"content":[
+                {"type":"tool_use","id":"t1","name":"Agent","input":{"subagent_type":"Explore"}},
+                {"type":"tool_use","id":"t2","name":"Agent","input":{"subagent_type":"Plan"}}]}}"#]);
+        let s = summarize(None, &t, &[]);
+        assert_eq!(s.delegation.unjoined_spawns, 2);
+        assert!(s.delegation.spawns.is_empty());
+        assert!(!s.delegation.is_empty(), "unknown work is still a tier");
+    }
+
+    /// Two spawns that edited the same file changed one file between them.
+    /// The tier totals merge the path sets rather than adding the counts.
+    #[test]
+    fn the_tier_totals_merge_files_rather_than_adding_them() {
+        let edit = |id: &str| {
+            format!(
+                r#"{{"type":"user","message":{{"content":[
+                    {{"type":"tool_result","tool_use_id":"{id}"}}]}},
+                    "toolUseResult":{{"filePath":"/shared.rs","structuredPatch":[
+                    {{"lines":["+one"]}}]}}}}"#
+            )
+        };
+        let call = |id: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"content":[
+                    {{"type":"tool_use","id":"{id}","name":"Edit"}}]}}}}"#
+            )
+        };
+        let a = subagent("a1", &[&call("x1"), &edit("x1")]);
+        let b = subagent("a2", &[&call("y1"), &edit("y1")]);
+        let s = summarize(None, &transcript(&[]), &[a, b]);
+
+        let c = &s.delegation.totals.changes;
+        assert_eq!(c.files_touched, 1, "one file, edited by two agents");
+        assert_eq!(c.lines_added, 2);
+        assert_eq!(c.by_tool["Edit"].calls, 2);
+        assert_eq!(c.by_tool["Edit"].files_touched, 1);
     }
 
     #[test]
@@ -1320,7 +2302,7 @@ mod tests {
             r#"{"type":"user","timestamp":"2026-08-20T12:00:30.000Z"}"#,
             r#"{"type":"assistant","timestamp":"2026-08-20T12:00:40.000Z"}"#,
         ]);
-        let a = summarize(None, &t).activity;
+        let a = summarize(None, &t, &[]).activity;
         assert_eq!(a.spans.len(), 2);
         assert_eq!(a.spans[0].secs, 30);
         assert_eq!(a.spans[0].idle_before_secs, 0);
@@ -1344,7 +2326,7 @@ mod tests {
             r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z"}"#,
             r#"{"type":"user","timestamp":"2026-08-20T10:01:00.000Z"}"#,
         ]);
-        assert_eq!(summarize(None, &short).activity.bucket_secs, 5);
+        assert_eq!(summarize(None, &short, &[]).activity.bucket_secs, 5);
 
         // Six hours of unbroken work cannot fit in five-second buckets.
         let lines: Vec<String> = (0..360)
@@ -1357,7 +2339,7 @@ mod tests {
             })
             .collect();
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-        let a = summarize(None, &transcript(&refs)).activity;
+        let a = summarize(None, &transcript(&refs), &[]).activity;
         assert!(a.bucket_secs > 5, "width did not widen: {}", a.bucket_secs);
         let total: usize = a.spans.iter().map(|s| s.buckets.len()).sum();
         assert!(total <= MAX_BUCKETS, "{total} buckets is too many");
@@ -1372,7 +2354,7 @@ mod tests {
                 {"type":"text","text":"<ide_opened_file>src/lib.rs"},
                 {"type":"text","text":"now ship it"}]}}"#,
         ]);
-        let s = summarize(None, &t);
+        let s = summarize(None, &t, &[]);
         assert_eq!(s.user_involvement.len(), 2);
         match &s.user_involvement[0] {
             Involvement::Prompt {
@@ -1407,7 +2389,7 @@ mod tests {
                 {"type":"tool_result","tool_use_id":"t1"}]},
                 "toolUseResult":{"answers":{"Which store?":"Postgres"}}}"#,
         ]);
-        let s = summarize(None, &t);
+        let s = summarize(None, &t, &[]);
         assert_eq!(s.ask_user_questions, 1);
         let questions: Vec<_> = s
             .user_involvement
@@ -1438,7 +2420,7 @@ mod tests {
                 {"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{}},
                 {"type":"tool_use","id":"t2","name":"Skill","input":{"skill":"sprint-ship"}},
                 {"type":"tool_use","id":"t3","name":"Agent","input":{"subagent_type":"Explore"}}]}}"#]);
-        let s = summarize(None, &t);
+        let s = summarize(None, &t, &[]);
         assert_eq!(s.ask_user_questions, 1);
         assert_eq!(s.skills, vec!["sprint-ship"]);
         assert_eq!(s.subagents, vec!["Explore"]);

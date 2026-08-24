@@ -52,15 +52,126 @@ Volume and outcome:
 | `assistant_turns`, `user_prompts` | `user_prompts` counts real user turns only — see the `promptId` trap in `transcript-format.md`. |
 | `tool_calls`, `tool_failures` | tool name → count. Failures are joined to their call by `tool_use_id`; a failure whose call is not in the file is blamed on `<unknown>` rather than dropped. |
 | `tokens` | input / output / thinking / cache read / cache write. |
-| `changes` | `files_touched`, `lines_added`, `lines_deleted` from `structuredPatch`, plus `opaque_edits`. |
-| `skills`, `subagents`, `subagent_transcripts` | Delegation. Subagent transcripts are counted but **not** folded in yet. |
+| `changes` | `files_touched`, `lines_added`, `lines_deleted` recovered from a diff, plus `opaque_edits` and a per-tool `by_tool` breakdown. |
+| `skills`, `subagents`, `subagent_transcripts` | What the session delegated to. The delegated *work* is in `delegation`. |
 
-### `changes.opaque_edits`
+### `changes` — exact, or visibly absent
 
-Shell calls that could have changed files and left no recoverable diff. These
-are **not** added to the line deltas — they are the count of edits kagviz
-cannot see. `lines_added` is a floor, not a total, and under agent instructions
-that prefer shell editing the shortfall is systematic rather than occasional.
+Every file-change quantity is in exactly one of **two** states, and the
+document says which:
+
+- **Recovered** — an exact number, read out of a diff the transcript actually
+  carries. It is in `lines_added` / `lines_deleted` / `files_touched`.
+- **Unrecovered** — a call that could have changed a file and exposed nothing
+  readable. It is in `opaque_edits`, and it is never folded into the deltas.
+
+There is no third state. An **inferred** number — a `git diff` over the
+session window being the obvious candidate — is not a function of the
+transcript bytes, and does not go in this document. If one ever ships it will
+be a new, separately named field that says *inferred* on it, and it will not
+touch the counts above. See `sprints/003-close-the-undercount.md` for why the
+reconciliation was rejected rather than attempted.
+
+#### `changes.opaque_edits`
+
+Calls that could have changed files and left no recoverable diff. `lines_added`
+is a floor, not a total, and under agent instructions that prefer shell editing
+the shortfall is systematic rather than occasional.
+
+Read it precisely: it counts calls whose **line deltas** are unknown, which is
+not the same as calls kagviz learned nothing from. Four things land here:
+
+- Every `Bash` / `PowerShell` call, counted from the call rather than from a
+  result — an interrupted shell call leaves no result and is still an edit
+  kagviz cannot see.
+- A file-editing MCP tool whose result no adapter could read.
+- A built-in editor (`Edit`, `Write`, `NotebookEdit`) whose result kagviz could
+  not read **and which did not error**. A *failed* edit changed nothing and is
+  a known zero; it is already visible in `tool_failures`.
+- A result that named its files but carried **no diff** — measured shape,
+  `{"applied":true,"files":[…]}` from a file server. Its files are exact and
+  are counted in `files_touched`; only its lines are missing. So a call can be
+  opaque here *and* have contributed to `files_touched`, and the two must be
+  read separately rather than as one verdict on the call.
+
+`files_touched` has its own floor, and it is not the same one. A `Bash` call
+that wrote a file leaves no path to count, so `files_touched` is also a lower
+bound wherever `opaque_edits` includes shell calls.
+
+#### `changes.by_tool`
+
+```json
+"by_tool": {
+  "Bash":                { "calls": 20, "files_touched": 0, "lines_added": 0,   "lines_deleted": 0, "opaque": 20 },
+  "Edit":                { "calls": 3,  "files_touched": 2, "lines_added": 18,  "lines_deleted": 6, "opaque": 0 },
+  "mcp__kaed-kai__edit": { "calls": 7,  "files_touched": 3, "lines_added": 25,  "lines_deleted": 1, "opaque": 0 }
+}
+```
+
+The audit surface for the adapter table — the same argument `mix` makes for a
+phase's `kind`. Without it, "+340 −88, and 51 unseen" has to be taken on faith.
+
+`calls` is edit-capable calls of that tool; `opaque` is how many of them gave
+no readable **line counts**. Summing `by_tool` gives back `lines_added`,
+`lines_deleted` and `opaque_edits` exactly — there is a test.
+
+A tool can show a non-zero `opaque` *and* an exact `files_touched`: that is the
+files-without-a-diff case above, and it is the reason `opaque` is not simply
+"calls we could not read".
+
+`files_touched` does **not** sum, because it must not: two tools that edited
+the same file changed one file between them. Note also that a file is
+identified by whatever path the tool reported, and an MCP file server usually
+reports a root-relative path — possibly on another host. `files_touched`
+counts distinct identifiers, not resolved filesystem paths.
+
+### `delegation` — work the session handed to subagents
+
+Added in sprint 003, additively: nothing above moved.
+
+```json
+"delegation": {
+  "spawns": [
+    { "agent_id": "a3f518e6…", "subagent_type": "Explore", "model": "claude-opus-4-8[1m]",
+      "description": "Map linking-layer code", "sidecar": true,
+      "started": "…", "ended": "…", "active_secs": 323,
+      "records": 143, "skipped_lines": 0, "assistant_turns": 92,
+      "tool_calls": { "Bash": 31, "Read": 17 }, "tool_failures": {},
+      "tokens": { … }, "changes": { … } }
+  ],
+  "unjoined_spawns": 0,
+  "inline_records": 0,
+  "totals": { "records": 166, "assistant_turns": 105, "tool_calls": { … },
+              "tool_failures": { … }, "tokens": { … }, "changes": { … } }
+}
+```
+
+**A tier, not an addend.** The session's own numbers are exactly what they
+were before this field existed: a session that spawned two agents still made
+two `Agent` calls, and that is what `tool_calls` says. Delegated cost stands
+beside it. Burying it inside the parent would hide the number a reader is most
+often here for — one corpus spawn ran 48 tool calls and 25k output tokens
+behind a single `Agent` call.
+
+Leaving the reader to add the two up is the same failure in miniature, so the
+sum is stated explicitly. It is a *method* rather than a field —
+`combined_tool_calls`, `combined_tool_failures`, `combined_output_tokens`,
+following `total_tool_calls` — because the facts carry each tier once and a sum
+anyone can recompute is not a separate fact. What is not optional is showing it.
+
+**`active_secs` does not combine.** A subagent runs while the session waits on
+it, so those seconds overlap rather than add. There is deliberately no
+`combined_active_secs`; tokens add across concurrent agents, seconds do not.
+
+**Subagents are absent from `activity` and `phases`.** Those cut the *parent's*
+timeline, and a concurrent agent has no position on it.
+
+| Field | Meaning |
+|---|---|
+| `spawns[]` | One per delegated agent, ordered by start time. `sidecar` is `true` when the numbers came from a `subagents/agent-*.jsonl` file, `false` when they came from `isSidechain` records an older CLI inlined into the parent. `subagent_type`, `description` and `model` are absent when the spawn could not be joined to an `Agent` call. |
+| `unjoined_spawns` | `Agent` calls with no transcript to read. The work happened and kagviz cannot see it — an unknown, not a zero. |
+| `inline_records` | Records lifted *out* of the parent's counts because they were inlined subagent turns. Reported so the move is visible rather than silent. |
+| `totals` | The tier summed. `changes.files_touched` merges the path sets across spawns rather than adding the counts. |
 
 ### `activity` — the time series
 

@@ -121,6 +121,18 @@ Runs on kai, which owns `/ai-data` (local NVMe, 3.1T free):
   plain `scp`/`sftp` as the fallback. cleo's transcripts live under
   `C:/Users/kenhi/.claude/projects`.
 
+**An unreachable host is a normal night, not a failure.** cleo sleeps
+occasionally and Windows Update reboots it on its own schedule; kubs0 could
+be down for maintenance. The collector treats each host independently: a
+host that does not answer is skipped with a note in the run log, the other
+hosts still sync, and the derive stage still runs over whatever arrived.
+The missed sessions are simply picked up the next night — the accumulating
+mirror makes a skipped run cost nothing but latency, and the ~30-day source
+window means even a week of misses loses nothing. What must *not* happen:
+one dead host aborting the run, or a partial sync being mistaken for "host
+had nothing new" — the run log says which hosts were reached, so an absence
+is visible rather than silent (the same rule the facts already live by).
+
 After sync, the derive stage runs kagviz over new/updated sessions: facts,
 report, then the regenerated index. If kvllm is up, `--label` can join the
 nightly derive — the cache keys on the facts digest, so labels stay

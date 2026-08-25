@@ -156,10 +156,14 @@ fn headline(h: &mut String, s: &Summary) {
         &s.assistant_turns.to_string(),
         &format!("{} user prompt(s)", s.user_prompts),
     );
-    let failed = if failures > 0 {
-        format!("{failures} failed")
-    } else {
-        "none failed".to_string()
+    // The count says nothing without its denominator beside it — 45 failed of
+    // 2,777 is a different session from 45 of 90 — so the rate follows it on
+    // the same line. `tool_failure_rate` owns the denominator decision and
+    // the `<unknown>` guard; the zero case stays bare.
+    let failed = match (failures, s.tool_failure_rate()) {
+        (0, _) => "none failed".to_string(),
+        (n, Some(rate)) => format!("{n} failed · {}", fmt::percent(rate)),
+        (n, None) => format!("{n} failed"),
     };
     // Delegated calls are named right here rather than only in the tier
     // below. A session that spawned three agents shows three `Agent` calls in
@@ -218,6 +222,22 @@ fn time_strip(h: &mut String, s: &Summary) {
         n if n <= NARROW_BREAKS_MIN => "dense",
         _ => "packed",
     };
+    // Past a few hundred columns no CSS constant reaches the strip: it is a
+    // wall of 2px bars, and the fix is a zoom (#1591 — the real one lands in
+    // the front-end). Until then, a checkbox: CSS `:checked` alone, no
+    // script, so the report stays self-contained. Checked, every column takes
+    // a fixed readable width and the strip scrolls sideways. It only ever
+    // widens, so below the threshold it would change nothing and is not
+    // offered — the control precedes the strip as its *sibling*, which is the
+    // whole mechanism (`~`), so it cannot live inside a `<p>`.
+    let buckets: usize = a.spans.iter().map(|sp| sp.buckets.len()).sum();
+    if buckets >= ZOOM_MIN_BUCKETS {
+        h.push_str(
+            "<input type=\"checkbox\" id=\"zoom\" class=\"zoom\">\
+             <label class=\"zoomctl\" for=\"zoom\">zoom in<span> — every column at a \
+             readable width; the strip scrolls sideways</span></label>\n",
+        );
+    }
     h.push_str(&format!("<div class=\"strip {class}\">\n"));
 
     for (si, span) in a.spans.iter().enumerate() {
@@ -274,6 +294,29 @@ const LABELLED_BREAKS_MAX: usize = 12;
 /// are, and that is the same density at which the whole strip stops being
 /// legible — the fix there is zooming it (#1591), not shaving pixels here.
 const NARROW_BREAKS_MIN: usize = 60;
+
+/// Columns at or above which the strip offers the zoom-in checkbox.
+///
+/// The zoom sets each column to [`ZOOM_COLUMN_PX`]; at the layout's full
+/// width — 1480px less the page and card padding, about 1,400px of strip —
+/// that is room for roughly 116 columns before the flex share squeezes them
+/// narrower. Below that count the zoom would change nothing at full width,
+/// and a control that does nothing is worse than one that arrives a little
+/// late on a half-width window. Ken's goldilocks reference (img-639 on
+/// #1591) is a 118-column strip filling exactly that width, which is where
+/// the number comes from. Across the corpus it offers the box on about
+/// 250 of 400 sessions: `MAX_BUCKETS` is 240, so anything over an hour or two
+/// saturates the strip.
+const ZOOM_MIN_BUCKETS: usize = 120;
+
+/// Column width, in CSS pixels, that the zoom sets — the density of the
+/// reference snip (11–12px). Spelled in the `.zoom:checked` rule in [`CSS`]
+/// and mirrored here for the doc comment; the zoom test holds the two in step.
+#[allow(
+    dead_code,
+    reason = "read by that test; the stylesheet is the real use"
+)]
+const ZOOM_COLUMN_PX: u32 = 12;
 
 /// The band width, in CSS pixels, at which a phase label is worth drawing.
 ///
@@ -998,8 +1041,21 @@ header dl.meta{max-width:96ch}
 .track{flex:1;display:flex;align-items:flex-end}
 .col-b .bar{width:100%;background:var(--bar);border-radius:1px 1px 0 0;min-height:1px}
 .col-b .bar.fail{background:var(--fail)}
-.axis{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted);
-  padding:4px 3px 2px;border-top:1px solid var(--line);gap:6px;white-space:nowrap;overflow:hidden}
+/* The axis text is gated on the span's rendered width the way the band label
+   is. A one-column span used to show the first glyph and a half of its
+   timestamp, and two hundred of those made a row of junk under the strip
+   (visible in img-638 on #1591). Narrow: nothing. Room for the duration: the
+   duration, kept right. Room for both: both. The height is fixed so an empty
+   axis still lines up with its neighbours' rules. As a container the axis
+   also has no intrinsic width, so a zoomed span is sized by its columns and
+   never by its own timestamp. */
+.axis{display:flex;justify-content:space-between;font-size:10.5px;line-height:15px;
+  min-height:22px;color:var(--muted);padding:4px 3px 2px;border-top:1px solid var(--line);
+  gap:6px;white-space:nowrap;overflow:hidden;container-type:inline-size}
+.axis span{display:none}
+.axis span:last-child{margin-left:auto}
+@container (min-width:44px){ .axis span:last-child{display:inline} }
+@container (min-width:136px){ .axis span:first-child{display:inline} }
 .gap{display:flex;align-items:center;justify-content:center;
   background:repeating-linear-gradient(135deg,transparent 0 4px,var(--line) 4px 5px);
   border-left:1px dashed var(--line);border-right:1px dashed var(--line)}
@@ -1010,6 +1066,19 @@ header dl.meta{max-width:96ch}
 .strip.packed .gap{flex:0 0 3px;border-left-width:0;border-right-width:0}
 .gap span{font-size:10px;color:var(--muted);background:var(--panel);padding:1px 3px;
   border-radius:3px;transform:rotate(-90deg);white-space:nowrap}
+/* zoom in (#1614): CSS only, so the report stays self-contained. Checked, the
+   spans stop shrinking and take their content width — which is their
+   columns' width, since the bands and the axis are containers and contribute
+   none of their own — every column takes a fixed readable width, and the
+   strip scrolls. Columns keep flex-grow, so a strip with room to spare still
+   fills it: the zoom only ever widens. With width no longer scarce, packed
+   breaks get their 6px and dashed edges back. */
+.zoom{margin:0 6px 0 0;vertical-align:-1px}
+.zoomctl{display:inline-block;font-size:12.5px;color:var(--muted);margin:0 0 10px;
+  cursor:pointer;user-select:none}
+.zoom:checked ~ .strip .span{flex-basis:auto;flex-shrink:0}
+.zoom:checked ~ .strip .col-b{flex-basis:12px;flex-shrink:0}
+.zoom:checked ~ .strip.packed .gap{flex-basis:6px;border-left-width:1px;border-right-width:1px}
 .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);
   margin:10px 0 0;align-items:center}
 .key{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;
@@ -1255,6 +1324,92 @@ mod tests {
         }
         // The pasted URL is still on the page — as text, which is the point.
         assert!(html.contains("https://example.invalid/spec"));
+    }
+
+    /// A raw failure count says nothing without its denominator (#1590): 45
+    /// failed of 2,777 is a different session from 45 of 90. The rate is over
+    /// the calls — a failed call is a call, counted once — and the zero case
+    /// stays bare.
+    #[test]
+    fn the_headline_puts_the_failure_rate_beside_the_count() {
+        let html = render_lines(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "content":"go"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:10.000Z","message":{
+                "content":[{"type":"tool_use","id":"t1","name":"Bash"},
+                           {"type":"tool_use","id":"t2","name":"Bash"},
+                           {"type":"tool_use","id":"t3","name":"Read"},
+                           {"type":"tool_use","id":"t4","name":"Read"}]}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:20.000Z","message":{
+                "content":[{"type":"tool_result","tool_use_id":"t1","is_error":true}]}}"#,
+        ]);
+        assert!(
+            html.contains(r#"<span class="n">1 failed · 25.00%</span>"#),
+            "one of four, over the calls"
+        );
+
+        // No failures reads as it did: `none failed`, with no `0.00%` beside it.
+        let html = render_lines(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "content":"go"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:10.000Z","message":{
+                "content":[{"type":"tool_use","id":"t1","name":"Read"}]}}"#,
+        ]);
+        assert!(html.contains(r#"<span class="n">none failed</span>"#));
+
+        // A failure whose call is not in the file is blamed on `<unknown>` and
+        // is not among the calls either: it is counted, it is explained, and
+        // it does not put a 200% beside a count of two.
+        let html = render_lines(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "content":"go"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:10.000Z","message":{
+                "content":[{"type":"tool_use","id":"t1","name":"Read"}]}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:20.000Z","message":{
+                "content":[{"type":"tool_result","tool_use_id":"gone","is_error":true},
+                           {"type":"tool_result","tool_use_id":"gone2","is_error":true}]}}"#,
+        ]);
+        assert!(
+            html.contains(r#"<span class="n">2 failed</span>"#),
+            "no rate when no failure joined a call"
+        );
+        assert!(html.contains("could not be joined"));
+    }
+
+    /// Past a few hundred columns the strip is a wall of 2px bars and no
+    /// narrowing of the breaks reads (#1591). Until the front-end zooms for
+    /// real, a checkbox — CSS `:checked`, no script — sets every column to a
+    /// readable fixed width and lets the strip scroll (#1614). It is offered
+    /// only where it would change something.
+    #[test]
+    fn a_dense_strip_offers_a_zoom_in_and_a_short_one_does_not() {
+        // One record a minute for twelve minutes: one stretch on 5s columns,
+        // 145 of them — over the threshold, and well under MAX_BUCKETS.
+        let lines: Vec<String> = (0..=12)
+            .map(|i| format!(r#"{{"type":"user","timestamp":"2026-08-20T10:{i:02}:00.000Z"}}"#))
+            .collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let html = render_lines(&refs);
+        assert!(html.contains(r#"<input type="checkbox" id="zoom" class="zoom">"#));
+        // The control must precede the strip as its sibling — `:checked ~ .strip`
+        // is the whole mechanism, and a wrapper would silently break it.
+        let input = html.find(r#"id="zoom""#).expect("control");
+        let strip = html.find(r#"<div class="strip "#).expect("strip");
+        assert!(
+            input < strip,
+            "the checkbox comes before the strip it zooms"
+        );
+        assert!(
+            html.contains(&format!(
+                ".zoom:checked ~ .strip .col-b{{flex-basis:{ZOOM_COLUMN_PX}px"
+            )),
+            "the stylesheet sets the reference column width"
+        );
+        assert!(!html.contains("<script"), "still no script");
+
+        // Two records a minute apart: thirteen columns, nothing to zoom.
+        let html = render_lines(&refs[..2]);
+        assert!(!html.contains(r#"id="zoom""#));
     }
 
     /// Wall clock stays on the page — trap #2 exists because active-alone is

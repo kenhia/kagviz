@@ -40,6 +40,16 @@ pub fn count(n: u64) -> String {
     out
 }
 
+/// A ratio as a percentage: `1.62%`.
+///
+/// Two decimals, fixed. The corpus's failure rates run from 0.3% to 25%, and
+/// at the low end — where most sessions sit — `1.6%` folds a good session
+/// and a rough one into the same figure while `1.62%` keeps them apart. A
+/// fixed width also keeps the rate readable as a column across reports.
+pub fn percent(ratio: f64) -> String {
+    format!("{:.2}%", ratio * 100.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,5 +74,14 @@ mod tests {
         assert_eq!(count(999), "999");
         assert_eq!(count(1000), "1,000");
         assert_eq!(count(1234567), "1,234,567");
+    }
+
+    #[test]
+    fn percentages_keep_two_decimals() {
+        // The reference case from #1590: 45 of 2777.
+        assert_eq!(percent(45.0 / 2777.0), "1.62%");
+        assert_eq!(percent(0.25), "25.00%");
+        assert_eq!(percent(1.0 / 338.0), "0.30%");
+        assert_eq!(percent(1.0), "100.00%");
     }
 }

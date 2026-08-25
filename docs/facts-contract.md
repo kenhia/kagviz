@@ -175,6 +175,13 @@ sum is stated explicitly. It is a *method* rather than a field —
 following `total_tool_calls` — because the facts carry each tier once and a sum
 anyone can recompute is not a separate fact. What is not optional is showing it.
 
+`tool_failure_rate` is a method for the same reason: a quotient of two fields
+already here. Its denominator is `tool_calls` — a failed call is a call, counted
+once — and failures blamed on `<unknown>` are left out of the numerator, since
+their calls are not in the denominator either. A consumer computing the rate
+itself should make the same two choices, or its number will disagree with the
+report's.
+
 **`active_secs` does not combine.** A subagent runs while the session waits on
 it, so those seconds overlap rather than add. There is deliberately no
 `combined_active_secs`; tokens add across concurrent agents, seconds do not.

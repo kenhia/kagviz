@@ -393,8 +393,12 @@ fn show_session(root: &Path, id: &str, json: bool, label: &LabelOpts) -> Result<
         "turns     {} assistant, {} user prompts",
         s.assistant_turns, s.user_prompts
     );
+    let rate = s
+        .tool_failure_rate()
+        .map(|r| format!(" ({})", fmt::percent(r)))
+        .unwrap_or_default();
     println!(
-        "tools     {} calls, {} failed",
+        "tools     {} calls, {} failed{rate}",
         s.total_tool_calls(),
         s.total_tool_failures()
     );

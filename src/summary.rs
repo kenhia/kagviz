@@ -528,6 +528,32 @@ impl Summary {
         self.tool_failures.values().sum()
     }
 
+    /// The share of this session's tool calls that failed, as a ratio.
+    ///
+    /// Over the calls, not calls plus failures: `tool_calls` counts every
+    /// `tool_use` and `tool_failures` counts the results that came back
+    /// `is_error`, joined to those same calls — a failed call is a call,
+    /// already counted once, and adding it again undercounts the rate.
+    ///
+    /// `None` when there is nothing worth dividing: no calls, or no failure
+    /// that joined to one. The zero case reads as `none failed` wherever it
+    /// is shown, and a `0.00%` beside that is noise. Failures blamed on
+    /// `<unknown>` are left out of the numerator — their calls are not in the
+    /// file, so they are not in the denominator either, and counting them
+    /// would let the rate pass 100% on a session whose one visible call
+    /// succeeded. The tool mix says how many there were. (Measured across the
+    /// corpus: no session has any, so this is a guard, not a case.)
+    ///
+    /// A method, not a field, for the reason `combined_tool_calls` is: the
+    /// facts carry the two counts once, and a quotient anyone can recompute
+    /// is not a separate fact.
+    pub fn tool_failure_rate(&self) -> Option<f64> {
+        let calls = self.total_tool_calls();
+        let unknown = self.tool_failures.get("<unknown>").copied().unwrap_or(0);
+        let joined = self.total_tool_failures().saturating_sub(unknown);
+        (calls > 0 && joined > 0).then(|| f64::from(joined) / f64::from(calls))
+    }
+
     /// Phase kinds by time spent, largest first: `(kind, phases, secs)`.
     pub fn phase_rollup(&self) -> Vec<(PhaseKind, usize, i64)> {
         let mut by: BTreeMap<PhaseKind, (usize, i64)> = BTreeMap::new();

@@ -56,7 +56,8 @@ wrote report.html (52107 bytes)
 
 One file, no external assets — no CDN, no web fonts, no scripts — so it opens
 with no network, mails as an attachment, and still renders in five years. It
-carries session identity, a headline row, the time strip with its phase bands,
+carries session identity, a headline row, the time strip with its phase bands
+(and, on a dense session, a zoom-in checkbox — CSS only, still no script),
 where the time went by phase, the tool mix with failures, file changes, token
 totals, and the moments the user was involved.
 

@@ -269,6 +269,61 @@ inversion this field is fenced off to prevent. Absent headline, not empty
 headline; the layout is built around having none, because that is the default
 path.
 
+### `sessions.json` — the cross-host index
+
+Added in sprint 007. **A second contract, not part of the facts document**: it
+is written by `kagviz derive` (and `kagviz index`) into `derived/`, one row per
+session across every mirrored host, and it is the file a browse page or a
+front-end reads *first* — to choose a session before fetching its facts.
+The same rules apply: adding a field is not a breaking change, changing or
+removing one is, and every figure is copied or summed from that session's
+facts document. Nothing in it is computed from a transcript directly, and
+nothing in it is inferred.
+
+```json
+{ "sessions": [
+  { "host": "kai", "session_id": "63a9b83b-…",
+    "project": "-home-ken-5090", "cwd": "/home/ken/5090", "git_branch": "main",
+    "started": "…", "ended": "…", "wall_secs": 9000, "active_secs": 2280,
+    "user_prompts": 7, "assistant_turns": 41,
+    "tool_calls": 83, "tool_failures": 2,
+    "files_touched": 3, "lines_added": 57, "lines_deleted": 3, "opaque_edits": 28,
+    "output_tokens": 35663, "phases": 44, "delegated_spawns": 2, "skipped_lines": 0,
+    "models": ["claude-opus-5"], "cli_versions": ["2.1.240"],
+    "opened_by": "fix the failing test",
+    "headline": "Closed the file-change undercount with an adapter table.",
+    "facts": "facts/kai/63a9b83b-….json", "report": "reports/kai/63a9b83b-….html",
+    "source_digest": "sha256:…", "kagviz": "0.1.0 (a1b2c3d)" }
+] }
+```
+
+An object holding an array rather than a bare array, so a top-level field can
+be added later without breaking a consumer.
+
+| Field | Meaning |
+|---|---|
+| `host` | The mirror the session came from — the directory name under `live/`. Not in the facts, which are host-agnostic. |
+| `session_id` | The transcript's file stem, which is what `kagviz show <id>` takes. |
+| `project`, `cwd`, `git_branch`, `started`, `ended`, `wall_secs`, `active_secs`, `user_prompts`, `assistant_turns`, `skipped_lines`, `models`, `cli_versions` | Copied from the facts. `models` and `cli_versions` are the facts' keys and set, as sorted arrays. |
+| `tool_calls`, `tool_failures` | The facts' per-tool maps summed — the session's own tier, exactly `total_tool_calls()`. Delegated work is **not** folded in; `delegated_spawns` says how many agents there were. |
+| `files_touched`, `lines_added`, `lines_deleted`, `opaque_edits` | The facts' `changes` totals. Read `opaque_edits` the way the facts say to: the deltas are a floor wherever it is non-zero. |
+| `output_tokens` | `tokens.output`. |
+| `phases` | How many. |
+| `opened_by` | The first non-empty prompt preview in `user_involvement` — what the session was opened with. **Absent** when there is none. |
+| `headline` | `labels.headline`, when the facts carry labels. Written by a model, not counted — the same boundary the facts draw, and the index page marks it the same way. **Absent** otherwise. |
+| `facts`, `report` | Paths relative to the derived root, which is the served root. |
+| `source_digest`, `kagviz` | From `state.json`: the sha256 over the transcript bytes the facts were derived from, and the kagviz version that derived them. Absent only for a facts file the derive did not write (dropped in by hand). |
+
+**Optional fields are absent, never `null`.** This contract keeps from the
+start what the facts document promises and does not yet fully deliver (the
+`null`-vs-absent drift found in review 006 is queued for sprint 009).
+
+Ordering is by `started`, newest first, then host, then id — stable across
+runs, so the file is byte-identical when nothing was derived.
+
+The index page (`index.html`) beside it is rendered from this file alone, the
+same way the report is rendered from the facts alone.
+
 ### `activity` — the time series
 
 Added in sprint 001, additively: the totals above did not move.

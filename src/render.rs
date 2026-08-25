@@ -888,7 +888,7 @@ fn clock(t: &DateTime<Utc>) -> String {
 ///
 /// Tool output and prompt text go straight onto the page, and both routinely
 /// contain angle brackets and quotes.
-fn esc(raw: &str) -> String {
+pub(crate) fn esc(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for c in raw.chars() {
         match c {

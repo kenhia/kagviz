@@ -1,0 +1,13 @@
+# kai's zone is America/Los_Angeles, so 04:00 here is Ken's 04:00 Pacific
+# across DST — the hour asked for at review 006. Persistent=true runs a missed
+# night at the next boot, which the accumulating mirror makes free: a skipped
+# run costs latency, and the ~30-day source window means nothing is lost.
+[Unit]
+Description=kagviz nightly collection timer
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

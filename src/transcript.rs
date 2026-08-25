@@ -6,6 +6,7 @@
 //! kept rather than rejected, because the format drifts under us. See
 //! `docs/transcript-format.md` for what the records actually contain.
 
+use crate::discover::SessionPaths;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
@@ -268,6 +269,20 @@ pub fn read_subagent(path: &Path) -> Result<Subagent> {
         agent_id,
         transcript: read(path)?,
     })
+}
+
+/// Read a session's transcript and every subagent sidecar beside it.
+///
+/// The sidecars are read here, at the edge, so `summarize` stays a pure
+/// function of bytes handed to it rather than of what happens to be on disk.
+pub fn read_session(session: &SessionPaths) -> Result<(Transcript, Vec<Subagent>)> {
+    let t = read(&session.transcript)?;
+    let subagents = session
+        .subagents
+        .iter()
+        .map(|p| read_subagent(p))
+        .collect::<Result<Vec<_>>>()?;
+    Ok((t, subagents))
 }
 
 /// Read a transcript, skipping (and counting) lines that will not parse.

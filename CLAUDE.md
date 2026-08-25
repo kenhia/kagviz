@@ -98,6 +98,9 @@ Clippy runs with `-D warnings` over test targets too.
 - `src/transcript.rs` — tolerant record model. Parsing must never reject an
   unknown record type or field.
 - `src/summary.rs` — the deterministic pass.
+- `docs/collection.md` — the live mirror under `/ai-data/kagviz-data/live`,
+  the nightly `derive`, and what is served. **Read this before touching
+  `collect/` or `src/derive.rs`.**
 - `sprints/planning/roadmap.md` — what is planned and why.
 
 ### Conventions that are easy to get wrong
@@ -119,7 +122,12 @@ Clippy runs with `-D warnings` over test targets too.
   a present `null` — and a rejected field takes the whole record with it. Any
   typed non-`Option` field needs `deserialize_with = "null_as_default"`.
 - **The renderer reads the facts, never the transcript.** If you find yourself
-  wanting a value the facts do not carry, add it to the facts.
+  wanting a value the facts do not carry, add it to the facts. The index
+  (`sessions.json`, `index.html`) reads the facts files the same way — and is
+  its own contract, documented beside the facts.
+- **Nothing writes into `live/<host>/projects/`.** The mirrors are verbatim;
+  everything computed goes under `derived/`, stamped with the kagviz that made
+  it, and is regenerable. A sync never propagates a deletion.
 - When adding a field parsed for future use, annotate it and say what will read
   it. Use `#[expect(dead_code)]` where nothing reads it yet, `#[allow(...)]`
   where only tests do (an `expect` would be unfulfilled under `--all-targets`).

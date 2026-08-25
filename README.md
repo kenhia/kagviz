@@ -18,7 +18,9 @@ already counted — never to produce the facts.
 Early, but usable. The deterministic core reads transcripts and summarizes
 them, `kagviz render` writes a self-contained HTML report, the session is cut
 into labelled phases, and an opt-in `--label` pass lets a model write the
-headline over facts already counted. See `sprints/planning/roadmap.md`.
+headline over facts already counted. On the homelab, a nightly collector
+mirrors every host's transcripts before the CLI prunes them and derives a
+cross-host session index from the mirror. See `sprints/planning/roadmap.md`.
 
 ```console
 $ kagviz sessions
@@ -182,6 +184,37 @@ how many. A partial reading is never presented as a complete one.
 It is a field guide, not a spec: the format is undocumented and drifts between
 CLI releases. `docs/facts-contract.md` documents the JSON the extractor emits
 and the rules that govern changing it.
+
+## Collection
+
+The CLI prunes `~/.claude/projects` after ~30 days, so on its own a session
+report is a thing you can make for a month. `collect/` keeps history:
+
+```console
+$ just collect            # sync kai, kubs0, cleo into /ai-data/kagviz-data/live, then derive
+kai    ok              12 file(s)    3s
+kubs0  ok               0 file(s)    2s
+cleo   unreachable      0 file(s)    0s  did not answer ssh
+kai        199 session(s)      2 derived    197 unchanged
+kubs0       93 session(s)      0 derived     93 unchanged
+cleo       113 session(s)      0 derived    113 unchanged
+index      405 session(s) → /ai-data/kagviz-data/live/derived/index.html
+```
+
+An **accumulating mirror** per host (never pruned, never written by kagviz),
+and under `derived/` the facts, a report, and a cross-host `sessions.json` +
+`index.html` regenerated for whatever changed — by content hash, and in full
+whenever the kagviz that derived it changes. A host that is asleep is
+recorded as *unreachable* on the page rather than read as "nothing new". A
+systemd user timer on kai runs it at 04:00 Pacific, and copyparty serves
+`derived/` on the tailnet — the page is
+`https://kai.encke-wahoo.ts.net:8027/kagviz/index.html` (the bare `/kagviz/`
+is copyparty's directory listing).
+
+`kagviz derive` and `kagviz index` are the two subcommands behind it;
+`docs/collection.md` has the layout, the mechanism per host, and the
+operating notes. `sessions.json` is a contract like the facts —
+`docs/facts-contract.md` documents it.
 
 ## Where it fits
 

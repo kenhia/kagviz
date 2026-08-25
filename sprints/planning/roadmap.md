@@ -82,14 +82,21 @@ since day one.
   "nothing new"; copyparty serves `derived/` on the tailnet at `/kagviz/`.
   See `sprints/007-collect-the-fleet-nightly.md` and `docs/collection.md`.
 
+- **Sprint 008 — report legibility quick wins.** Two presentation fixes Ken
+  pointed at on the 002 report, and no fact moved: 191 of 194 local sessions
+  render byte-identical facts to main's, the other 3 having been resumed since
+  the nightly. The headline tools tile reads `45 failed · 1.62%` — over the
+  calls, a failed call being a call, with `<unknown>` failures kept out of the
+  numerator so the rate cannot pass 100% — and the terminal `show` says the
+  same through the same `fmt::percent`. A zoom-in checkbox above the time
+  strip, CSS `:checked` only, sets every column to 12px and lets the strip
+  scroll: offered from 120 columns, where the full-width layout starts
+  squeezing them, and it only ever widens. The zoom exposed the row of clipped
+  timestamps under dense strips, now gated on rendered width the way band
+  labels are. The real pan/zoom (#1591) still waits for the front-end. See
+  `sprints/008-report-legibility-quick-wins.md`.
+
 ## Now
-
-- **Report legibility quick wins (sprint 008).** #1590 (failure rate beside
-  the count) and the #1591 interim: a zoom-in checkbox rendering dense strips
-  at readable element size in a horizontal scroller — CSS `:checked` only, so
-  the report stays self-contained with no JS.
-
-## Next
 
 - **The facts learn detail (sprint 009).** The contract work the app needs:
   a per-event detail tier (tool calls with name, timing, outcome) so a
@@ -100,6 +107,8 @@ since day one.
   it all: emit absent-not-null as the contract already promises, one shared
   accumulator for both counting tiers, and the in-repo fixture + CI + golden
   render test that make the guarantees reproducible from a clone.
+
+## Next
 
 - **Reconcile shell edits, honestly or not at all.** The `opaque_edits` gap is
   the one remaining undercount, and the hard one: nothing in the transcript

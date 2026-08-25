@@ -2,7 +2,10 @@
 
 `kagviz show <id> --json` emits one JSON object: everything kagviz was able to
 count about a session. It is the **only** input the renderer takes, and it is
-the seam a future interactive front-end plugs into.
+the seam a future interactive front-end plugs into. Two more documents live
+under the same rules and are described at the end: `sessions.json`, the index
+a consumer reads *first*, and the [events document](#the-events-document),
+the detail tier it reads *last*.
 
 Treat it as a contract:
 
@@ -326,7 +329,7 @@ be added later without breaking a consumer.
 | `phases` | How many. |
 | `opened_by` | The first non-empty prompt preview in `user_involvement` — what the session was opened with. **Absent** when there is none. |
 | `headline` | `labels.headline`, when the facts carry labels. Written by a model, not counted — the same boundary the facts draw, and the index page marks it the same way. **Absent** otherwise. |
-| `facts`, `report` | Paths relative to the derived root, which is the served root. |
+| `facts`, `report`, `events` | Paths relative to the derived root, which is the served root. `events` (added in 009) is the [events document](#the-events-document) for the session. |
 | `source_digest`, `kagviz` | From `state.json`: the sha256 over the transcript bytes the facts were derived from, and the kagviz version that derived them. Absent only for a facts file the derive did not write (dropped in by hand). |
 
 **Optional fields are absent, never `null`.** This contract kept from the
@@ -366,8 +369,12 @@ series under 240 buckets, so a ten-minute session and a ten-hour one both
 render legibly and two renderings of one session can never disagree about the
 scale. Measured over 405 transcripts, the ladder has never bottomed out.
 
-Buckets carry counts only. What the work *was* is deliberately absent:
-segmentation and labelling are later work, and neither belongs in a bucket.
+Buckets carry counts only. What the work *was* is deliberately absent —
+segmentation and labelling are `phases` and `labels`, and neither belongs in
+a bucket — and so is what *happened*: the turns and tool calls a bucket
+counts are in the [events document](#the-events-document), keyed by time, so
+a consumer that wants a bucket's contents, or buckets finer than the 240 this
+series caps at, reads them there.
 
 ### `phases` — the session cut into stretches of work
 
@@ -455,3 +462,82 @@ a guess at the same string.
 
 `chosen` is absent when the transcript holds no answer. That is an interrupted
 question, not a silent one, and it must not be rendered as a default choice.
+
+## The events document
+
+Added in sprint 009. **A third contract, beside the facts and `sessions.json`**,
+and the detail tier under the facts: `kagviz show <id> --events` emits it,
+`kagviz derive` writes it to `derived/events/<host>/<id>.json` beside the
+facts, and `sessions.json` links it as `events`. It carries every assistant
+turn and every tool call of a session, in time order, each stamped with the
+phase that holds it — the things the facts' buckets and phases are counts
+*of*. A click on a timeline segment reads this; nothing on the static report
+does.
+
+A separate document rather than a field of the facts, on purpose: a
+twelve-hour session's facts are ~100 KB and its events run to megabytes, and
+"forest, tree, leaf" wants the leaf fetched on demand. The same rules apply —
+adding a field is not a breaking change, changing or removing one is, an
+optional field is absent and never `null`, and nothing here is inferred.
+
+**One pass, not two.** The events are built by the same accumulator that
+produces the facts, so the two documents cannot disagree. The invariants a
+consumer can lean on, and that the tests hold:
+
+- `tool` events == the facts' `tool_calls` summed; `turn` events ==
+  `assistant_turns`.
+- `tool` events with `failed` == `tool_failures` summed **less `<unknown>`**.
+  A failure whose call is not in the file has no call to hang on: the facts
+  count it, the events cannot place it.
+- `tool` events with `opaque` == `changes.opaque_edits`; `lines_added` and
+  `lines_deleted` summed over the events are `changes.lines_added` and
+  `lines_deleted`; the distinct `files` are `changes.files_touched`.
+- For every phase `i`, the events with `phase: i` add up to that phase's
+  `tool_calls`, `tool_failures` and `output_tokens`.
+- The same for each `spawns[k]` against `delegation.spawns[k]`.
+
+```json
+{ "session_id": "63a9b83b-…",
+  "events": [
+    { "kind": "turn", "at": "…", "phase": 3, "model": "claude-opus-5",
+      "tokens": { "input": 1200, "output": 80, "thinking": 30,
+                  "cache_read": 5000, "cache_write": 400 },
+      "tools": 2 },
+    { "kind": "tool", "at": "…", "phase": 3, "tool": "Edit", "class": "edit",
+      "id": "toolu_…", "input_bytes": 412, "result_at": "…", "result_bytes": 66,
+      "files": ["/home/ken/src/x/sync.sh"], "lines_added": 2, "lines_deleted": 1 },
+    { "kind": "tool", "at": "…", "phase": 3, "tool": "Bash", "class": "run",
+      "id": "toolu_…", "input_bytes": 90, "result_at": "…", "failed": true,
+      "result_bytes": 4400, "opaque": true }
+  ],
+  "spawns": [ { "agent_id": "a3f518e6…", "events": [ "…" ] } ] }
+```
+
+| Field | Meaning |
+|---|---|
+| `events[]` | The session's own tier, in the order `activity` and `phases` were cut from: by time, ties in transcript order, then any event whose record carried no timestamp. A `turn` is followed directly by its `tool` events, in the order the message listed them. |
+| `kind` | `turn` — an assistant message; `tool` — one call it made. Prompts and questions are not repeated here: `user_involvement` in the facts has them, with timestamps to merge on. |
+| `at` | The record's timestamp. **Absent** when the record had none — and then so is `phase`. |
+| `phase` | Index into the facts' `phases`. Absent on every event of a spawn — phases cut the *parent's* timeline — and on an untimestamped record. |
+| turn: `model`, `tokens`, `tools` | The turn's model and usage (absent when the record carried none), and how many `tool` events follow it. |
+| tool: `tool`, `class`, `id` | The tool's name; how the phase mix classified it — `read`, `edit`, `run`, `org`, `ask`, `delegate`, `other`, the same table `mix` uses; and the `tool_use` id, for joining back to the raw transcript. |
+| tool: `input_bytes` | The call's input re-serialized compactly with sorted keys — a canonical size, not the on-disk one. |
+| tool: `result_at`, `failed`, `result_bytes` | When the result was recorded; whether it came back `is_error` (present only when true); UTF-8 bytes of the result's text as the model was handed it. All three **absent** when no result arrived — an interrupted call, or one still running when the transcript ends. An offloaded result (`<persisted-output>`) counts its placeholder and preview, which is what the model saw; the harness's own `persistedOutputSize` is not carried yet. |
+| tool: `files`, `lines_added`, `lines_deleted`, `opaque` | The call's file changes, under exactly the facts' two states. `files` are named when the result named them (absent when empty); the line counts are present when a diff was read and **absent** when not; `opaque` is present and true when this call is one of `changes.opaque_edits`. A shell call is opaque from the moment it is made — an interrupted one leaves no result and is still an edit kagviz cannot see. |
+| `spawns[]` | One per `delegation.spawns[]`, same order, each with its `agent_id` and its own events. |
+
+**What a consumer does with it.** Click a bucket: the events with `at` in
+`[span.started + i·bucket_secs, +bucket_secs)`, plus the prompts and
+questions from `user_involvement` in the same window. Click a phase: filter
+on `phase`. Zoom past the strip's resolution: bucket the events yourself at
+any width — which is why `MAX_BUCKETS` stayed at 240 when this document was
+designed; the facts keep the resolution a static page needs and the app
+derives its own. The facts' `records` per bucket is the one count the events
+do not reproduce: it counts every timestamped record, `system` and snapshot
+records included, and those carry nothing worth an event.
+
+Not carried, deliberately: prompt and question text (the facts have them);
+tool inputs and outputs themselves (the transcript has them, and this
+document would be the transcript again); `system` records, hook summaries
+and API errors (see `transcript-format.md`, "what else is recoverable" —
+additive when wanted).

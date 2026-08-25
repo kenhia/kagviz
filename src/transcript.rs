@@ -139,6 +139,10 @@ pub struct Block {
     pub tool_use_id: Option<String>,
     pub is_error: Option<bool>,
     pub text: Option<String>,
+    /// A `tool_result`'s payload as the model was handed it: a string, or an
+    /// array of `text`/`image` blocks. Raw, because only its size is read —
+    /// `events::text_bytes`.
+    pub content: Option<Value>,
 }
 
 impl Block {

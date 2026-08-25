@@ -5,6 +5,7 @@
 
 mod derive;
 mod discover;
+mod events;
 mod fmt;
 mod label;
 mod render;
@@ -47,6 +48,10 @@ enum Command {
         /// Emit the facts document as JSON.
         #[arg(long)]
         json: bool,
+        /// Emit the events document as JSON instead: every turn and tool
+        /// call, joined to its phase — the detail tier under the facts.
+        #[arg(long, conflicts_with = "json")]
+        events: bool,
         #[command(flatten)]
         label: LabelOpts,
     },
@@ -122,8 +127,9 @@ fn main() -> Result<()> {
         Command::Show {
             session_id,
             json,
+            events,
             label,
-        } => show_session(&root, &session_id, json, &label),
+        } => show_session(&root, &session_id, json, events, &label),
         Command::Render {
             session_id,
             from,
@@ -298,12 +304,21 @@ fn list_sessions(root: &Path, project: Option<&str>) -> Result<()> {
 
 /// Summarize one session from its transcript on disk.
 fn load_session(root: &Path, id: &str) -> Result<Summary> {
+    Ok(load_session_with_events(root, id)?.0)
+}
+
+/// The facts and the events document, from one pass over the transcript.
+fn load_session_with_events(root: &Path, id: &str) -> Result<(Summary, events::Events)> {
     let session = discover::sessions(root, None)?
         .into_iter()
         .find(|s| s.id == id)
         .with_context(|| format!("no session {id} under {}", root.display()))?;
     let (t, subagents) = transcript::read_session(&session)?;
-    Ok(summary::summarize(Some(&session), &t, &subagents))
+    Ok(summary::summarize_with_events(
+        Some(&session),
+        &t,
+        &subagents,
+    ))
 }
 
 /// Read a facts document written by `show --json` (`-` reads stdin).
@@ -353,7 +368,14 @@ fn render_report(
     Ok(())
 }
 
-fn show_session(root: &Path, id: &str, json: bool, label: &LabelOpts) -> Result<()> {
+fn show_session(root: &Path, id: &str, json: bool, events: bool, label: &LabelOpts) -> Result<()> {
+    if events {
+        // The detail tier: the same bytes `derive` writes beside the facts.
+        // Labels are the facts' business and never ride here.
+        let (_, ev) = load_session_with_events(root, id)?;
+        println!("{}", serde_json::to_string_pretty(&ev)?);
+        return Ok(());
+    }
     let mut s = load_session(root, id)?;
     label_facts(&mut s, root, label);
     let s = s;

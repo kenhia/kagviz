@@ -2,11 +2,12 @@
 //!
 //! `live/<host>/projects/` is a verbatim mirror of one host's transcript store
 //! and is never written here. Everything under `derived/` is computed from it:
-//! facts and a report per session, `sessions.json` (the cross-host index — a
-//! contract, like the facts), `index.html` (the page a person picks a session
-//! from), `state.json` (what was derived from which bytes by which kagviz) and
-//! `META.json` (the last run). All of it is regenerable at will, and a kagviz
-//! upgrade regenerates all of it, because a changed extractor is changed facts.
+//! facts, events and a report per session, `sessions.json` (the cross-host
+//! index — a contract, like the facts), `index.html` (the page a person picks
+//! a session from), `state.json` (what was derived from which bytes by which
+//! kagviz) and `META.json` (the last run). All of it is regenerable at will,
+//! and a kagviz upgrade regenerates all of it, because a changed extractor is
+//! changed facts.
 //!
 //! Two rules carried over from the facts:
 //!
@@ -134,6 +135,12 @@ pub fn report_path(out: &Path, host: &str, id: &str) -> PathBuf {
     out.join("reports").join(host).join(format!("{id}.html"))
 }
 
+/// The events document beside the facts — the detail tier a front-end fetches
+/// on demand, the same bytes `kagviz show --events` prints.
+pub fn events_path(out: &Path, host: &str, id: &str) -> PathBuf {
+    out.join("events").join(host).join(format!("{id}.json"))
+}
+
 /// Derive facts and a report for every new or changed session under `live`,
 /// then regenerate the index and `META.json`.
 ///
@@ -161,11 +168,12 @@ pub fn derive(
         hr.sessions = sessions.len();
         for session in &sessions {
             let key = format!("{host}/{}", session.id);
-            let facts = facts_path(out, &host, &session.id);
-            let report = report_path(out, &host, &session.id);
-            match derive_one(
-                session, &facts, &report, &key, &mut state, opts.force, label,
-            ) {
+            let paths = Outputs {
+                facts: facts_path(out, &host, &session.id),
+                events: events_path(out, &host, &session.id),
+                report: report_path(out, &host, &session.id),
+            };
+            match derive_one(session, &paths, &key, &mut state, opts.force, label) {
                 Ok(true) => hr.derived += 1,
                 Ok(false) => hr.unchanged += 1,
                 Err(e) => {
@@ -199,12 +207,24 @@ pub fn derive(
     Ok(run)
 }
 
+/// What one session derives to.
+struct Outputs {
+    facts: PathBuf,
+    events: PathBuf,
+    report: PathBuf,
+}
+
+impl Outputs {
+    fn all_present(&self) -> bool {
+        self.facts.is_file() && self.events.is_file() && self.report.is_file()
+    }
+}
+
 /// `Ok(true)` when the session was (re)derived, `Ok(false)` when it was
-/// already up to date — same bytes, same kagviz, both outputs present.
+/// already up to date — same bytes, same kagviz, every output present.
 fn derive_one(
     session: &SessionPaths,
-    facts: &Path,
-    report: &Path,
+    out: &Outputs,
     key: &str,
     state: &mut State,
     force: bool,
@@ -214,18 +234,22 @@ fn derive_one(
         source_digest: source_digest(session)?,
         kagviz: VERSION.to_string(),
     };
-    if !force && state.get(key) == Some(&current) && facts.is_file() && report.is_file() {
+    if !force && state.get(key) == Some(&current) && out.all_present() {
         return Ok(false);
     }
     let (t, subagents) = transcript::read_session(session)?;
-    let mut s = summary::summarize(Some(session), &t, &subagents);
+    let (mut s, events) = summary::summarize_with_events(Some(session), &t, &subagents);
     label(&mut s);
     // The same bytes `kagviz show --json > file` writes, trailing newline
-    // included, so a derived facts file diffs clean against a baseline.
+    // included, so a derived facts file diffs clean against a baseline. The
+    // events likewise, against `show --events`.
     let mut json = serde_json::to_string_pretty(&s)?;
     json.push('\n');
-    write_atomic(facts, json.as_bytes())?;
-    write_atomic(report, render::report(&s).as_bytes())?;
+    write_atomic(&out.facts, json.as_bytes())?;
+    let mut json = serde_json::to_string_pretty(&events)?;
+    json.push('\n');
+    write_atomic(&out.events, json.as_bytes())?;
+    write_atomic(&out.report, render::report(&s).as_bytes())?;
     state.insert(key.to_string(), current);
     Ok(true)
 }
@@ -309,6 +333,9 @@ pub struct SessionEntry {
     /// Paths relative to the derived root, which is the served root.
     pub facts: String,
     pub report: String,
+    /// The events document — the detail tier under `facts`. Added in 009.
+    #[serde(default)]
+    pub events: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_digest: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -459,6 +486,7 @@ pub fn entry(host: &str, id: &str, s: &Summary, d: Option<&Derived>) -> SessionE
         headline: s.labels.as_ref().map(|l| l.headline.clone()),
         facts: format!("facts/{host}/{id}.json"),
         report: format!("reports/{host}/{id}.html"),
+        events: format!("events/{host}/{id}.json"),
         source_digest: d.map(|d| d.source_digest.clone()),
         kagviz: d.map(|d| d.kagviz.clone()),
     }
@@ -636,9 +664,11 @@ fn row(h: &mut String, s: &SessionEntry) {
     }
     h.push_str("</td>");
     h.push_str(&format!(
-        "<td class=\"links\"><a href=\"{}\">report</a> · <a href=\"{}\">facts</a></td>",
+        "<td class=\"links\"><a href=\"{}\">report</a> · <a href=\"{}\">facts</a> · \
+         <a href=\"{}\">events</a></td>",
         esc(&s.report),
-        esc(&s.facts)
+        esc(&s.facts),
+        esc(&s.events)
     ));
     h.push_str("</tr>\n");
 }
@@ -789,6 +819,7 @@ mod tests {
         assert_eq!(run.hosts["kubs0"].derived, 1);
         assert_eq!(run.indexed, 2);
         assert!(facts_path(&out, "kai", "a").is_file());
+        assert!(events_path(&out, "kai", "a").is_file());
         assert!(report_path(&out, "kai", "a").is_file());
         assert!(out.join("sessions.json").is_file());
         assert!(out.join("index.html").is_file());
@@ -869,6 +900,11 @@ mod tests {
         let kai = &doc.sessions[1];
         assert_eq!(kai.report, "reports/kai/old.html");
         assert_eq!(kai.facts, "facts/kai/old.json");
+        assert_eq!(kai.events, "events/kai/old.json");
+        assert!(
+            out.join(&kai.events).is_file(),
+            "the link on the page resolves"
+        );
         assert_eq!(kai.tool_calls, 1);
         assert_eq!(kai.opened_by.as_deref(), Some("make it go"));
         assert_eq!(kai.kagviz.as_deref(), Some(VERSION));

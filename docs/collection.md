@@ -20,6 +20,7 @@ snapshots with a date and a commit on them — and are untouched by any of this.
     sync.log                 # one line per host per run, appended forever
     derived/                 # everything computed from the mirrors
         facts/<host>/<session-id>.json     # `kagviz show --json`, byte for byte
+        events/<host>/<session-id>.json    # `kagviz show --events` — the detail tier
         reports/<host>/<session-id>.html   # `kagviz render`
         sessions.json        # the cross-host index — a contract (facts-contract.md)
         index.html           # the page a person picks a session from
@@ -97,9 +98,10 @@ For every `<live>/<host>/projects/` (a host is any directory holding a
    a resumed session appends, a re-copy touches, and only the first should
    re-derive. (The proposal's open question, answered.)
 2. Skip it if `state.json` records the same digest **and** the same kagviz
-   version, and both outputs exist. Otherwise count it, write the facts (the
+   version, and every output exists. Otherwise count it, write the facts (the
    same bytes `show --json` prints, trailing newline included, so a derived
-   facts file diffs clean against a baseline) and the report, and record it.
+   facts file diffs clean against a baseline), the events document (likewise,
+   against `show --events`) and the report, and record it.
 3. Write `state.json` after each host, so a run that dies keeps what it did.
 
 Then regenerate `sessions.json` and `index.html`, and write `META.json`.
@@ -217,9 +219,10 @@ a surprise later.
 - `kagviz sessions` still parses every transcript to print a table. The
   browse surface has moved to `derived/index.html`; the terminal command is
   unchanged and still slow on a large root.
-- No events tier below the bucket; that is sprint 009's contract work.
 - The index page is a static table, sorted newest first. Filtering and
-  pan/zoom belong to the front-end, which reads the same `sessions.json`.
+  pan/zoom belong to the front-end, which reads the same `sessions.json` —
+  and, since 009, the events document each row links, for what a click on a
+  segment shows.
 - `/kagviz/` still lands on copyparty's listing rather than the page.
   copyparty has `--ih` ("if a folder contains index.html, show that instead
   of the directory listing"), but it is a **global** flag — it would change

@@ -97,6 +97,18 @@ prefer shell editing may well *be* editing kagviz cannot see. They describe the
 tools, not the intent. A descriptive label is a separate, later field written by
 a model over these facts — it will never overwrite this one.
 
+A band names itself in the band where there is room for the word, and on a
+session with hundreds of stretches there is not. Below that width the band
+keeps its colour and its tooltip rather than showing a clipped fragment; the
+phase list beneath the strip is the key.
+
+Each phase is opened by the user turn that started it, and a slash command
+reads as the line that was typed — `/start-sprint korg:1606 proceed with
+implementation`, not the instruction document the harness hands the agent when
+a skill runs. Telling those two apart is `docs/transcript-format.md` trap 5,
+and getting it backwards is worth a look at that page before touching the
+classifier.
+
 ## The headline (opt-in)
 
 Everything above is counted. `--label` adds the one thing that is not: a model

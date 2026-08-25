@@ -5,7 +5,9 @@
 //! model-written narrative sits *on top* of this, never inside it.
 
 use crate::discover::SessionPaths;
-use crate::transcript::{Block, Content, INJECTED_PREFIXES, Record, Subagent, Transcript};
+use crate::transcript::{
+    Block, Content, INJECTED_PREFIXES, Record, Subagent, Transcript, command_line,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -710,7 +712,7 @@ pub fn summarize(
                 .filter(|b| matches!(b.kind.as_str(), "image" | "document"))
                 .count();
             s.pasted_attachments += attachments;
-            if is_user_turn(&msg.content) {
+            if is_user_turn(rec, &msg.content) {
                 s.user_prompts += 1;
                 event.user_turns += 1;
                 let (preview, truncated) = preview_of(&msg.content);
@@ -807,7 +809,6 @@ pub fn summarize(
         s.started = Some(*first);
         s.ended = Some(*last);
         (s.wall_secs, s.idle_secs) = wall_and_idle(&stamps);
-        s.active_secs = s.wall_secs - s.idle_secs;
     }
 
     s.delegation = build_delegation(subagents, &inline, &spawn_meta, agent_call_total);
@@ -822,6 +823,13 @@ pub fn summarize(
     let ranges = split_spans(&times);
     s.activity = build_activity(&events, &times, &ranges);
     s.phases = build_phases(&events, &times, &ranges);
+    // Read back off the spans rather than recomputed, so `active_secs` is the
+    // sum of the stretches *by construction*. `wall_secs - idle_secs` is the
+    // same quantity through two truncations against the spans' one each, and
+    // the two drifted apart — 198s of a 12h39m session with 209 spans. Phases
+    // already tile their span exactly, so this makes the headline, the strip
+    // and the phase list one number instead of three that nearly agree.
+    s.active_secs = s.activity.spans.iter().map(|sp| sp.secs).sum();
 
     s
 }
@@ -868,6 +876,20 @@ fn wall_and_idle(stamps: &[DateTime<Utc>]) -> (i64, i64) {
         .filter(|gap| *gap >= IDLE_GAP_SECS)
         .sum();
     (wall, idle)
+}
+
+/// Active seconds over *sorted* timestamps: the continuous stretches of work,
+/// each measured once and summed.
+///
+/// The same definition [`build_activity`] gives a span, applied where there
+/// are no spans to read it off — the delegated tier carries no strip. Keeping
+/// one definition is the point: a subagent's active time and the session's
+/// have to mean the same thing to be worth printing side by side.
+fn active_from_stretches(times: &[DateTime<Utc>]) -> i64 {
+    split_spans(times)
+        .iter()
+        .map(|&(a, b)| (times[b] - times[a]).num_seconds())
+        .sum()
 }
 
 /// Assemble the delegated tier from both shapes a spawn can arrive in.
@@ -1023,8 +1045,7 @@ fn summarize_spawn(records: &[&Record], skipped: usize, sidecar: bool) -> (Spawn
     if let (Some(first), Some(last)) = (stamps.first(), stamps.last()) {
         spawn.started = Some(*first);
         spawn.ended = Some(*last);
-        let (wall, idle) = wall_and_idle(&stamps);
-        spawn.active_secs = wall - idle;
+        spawn.active_secs = active_from_stretches(&stamps);
     }
     (spawn, tally)
 }
@@ -1236,10 +1257,20 @@ fn choose_bucket_secs(times: &[DateTime<Utc>], ranges: &[(usize, usize)]) -> i64
 /// Whether a `user` record is the user actually saying something.
 ///
 /// Three different things share the user channel: real prompts, tool results,
-/// and text the harness injects (IDE state, slash-command scaffolding, system
+/// and text the harness injects (IDE state, instruction documents, system
 /// reminders). Only the first is user involvement, and telling them apart is
 /// the whole job — `promptId` is present on all three.
-fn is_user_turn(content: &Content) -> bool {
+///
+/// Asked in two steps, cheapest and most reliable first. The harness *flags*
+/// what it wrote (`isMeta`), so that answers the question outright for a skill
+/// body, a resume nudge or an attachment placeholder — no shape-matching
+/// involved. Only an unflagged record reaches the content rules, and there a
+/// slash command's `<command-*>` scaffold counts: it is 158 bytes of what the
+/// user typed, not an injection.
+fn is_user_turn(rec: &Record, content: &Content) -> bool {
+    if rec.is_harness_written() {
+        return false;
+    }
     match content {
         Content::Text(text) => {
             let text = text.trim_start();
@@ -1266,6 +1297,12 @@ fn is_user_turn(content: &Content) -> bool {
 /// A one-line label for a user turn: the leading [`PREVIEW_CHARS`] characters
 /// of what the user actually typed, with injected context left out.
 ///
+/// A slash command is shown as the line the user typed — `/start-sprint
+/// korg:1606 proceed with implementation` — rebuilt from the scaffold's tags
+/// by [`command_line`]. Showing the tags themselves would spend the whole
+/// preview on markup, and showing the instruction document that follows would
+/// be showing the harness talking to the agent.
+///
 /// Returns the label and whether it was cut short.
 fn preview_of(content: &Content) -> (String, bool) {
     let raw = match content {
@@ -1278,6 +1315,7 @@ fn preview_of(content: &Content) -> (String, bool) {
             .join(" "),
         Content::Empty => String::new(),
     };
+    let raw = command_line(&raw).unwrap_or(raw);
     let flat = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     let truncated = flat.chars().count() > PREVIEW_CHARS;
     let preview = if truncated {
@@ -1760,6 +1798,142 @@ mod tests {
         );
     }
 
+    /// A skill invocation writes two user records and kagviz kept the wrong
+    /// one: the 158-byte `<command-*>` scaffold holding what the user typed
+    /// was discarded as injected, and the multi-kilobyte skill body that
+    /// follows it — `isMeta: true`, matching no prefix — was counted as the
+    /// user turn, becoming the prompt, the preview and a phase boundary.
+    /// Corpus-wide that was 39% of counted prompts and 504 real inputs lost.
+    #[test]
+    fn a_skill_invocation_counts_the_users_line_not_the_harness_body() {
+        let t = transcript(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "content":"<command-message>start-sprint</command-message>\n<command-name>/start-sprint</command-name>\n<command-args>korg:1606 proceed with implementation</command-args>"}}"#,
+            r#"{"type":"user","isMeta":true,"timestamp":"2026-08-20T10:00:01.000Z","message":{
+                "content":[{"type":"text","text":"Base directory for this skill: /home/ken/.claude/skills/start-sprint\n\n# Start Sprint Skill\n\n## Overview\n\nlots of instructions"}]}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:30.000Z","message":{
+                "content":[{"type":"tool_use","id":"t1","name":"Read"}]}}"#,
+        ]);
+        let s = summarize(None, &t, &[]);
+
+        assert_eq!(
+            s.user_prompts, 1,
+            "the scaffold is the prompt, the body is not"
+        );
+        assert_eq!(
+            s.phases.len(),
+            1,
+            "the harness body must not cut a phase of its own"
+        );
+        assert_eq!(
+            s.phases[0].opened_by.as_deref(),
+            Some("/start-sprint korg:1606 proceed with implementation"),
+            "the scaffold reconstructs what the user typed, exactly"
+        );
+        match &s.user_involvement[0] {
+            Involvement::Prompt {
+                preview, truncated, ..
+            } => {
+                assert_eq!(
+                    preview,
+                    "/start-sprint korg:1606 proceed with implementation"
+                );
+                assert!(!truncated);
+            }
+            other => panic!("expected a prompt, got {other:?}"),
+        }
+    }
+
+    /// The scaffold's tags are written in whatever order the command emitted
+    /// them, and every line after the first carries the caller's indentation.
+    /// Both shapes are in the corpus, so the parse reads tags, not layout.
+    /// A command with no arguments is just its name.
+    #[test]
+    fn a_command_scaffold_is_read_by_its_tags_not_its_layout() {
+        let t = transcript(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "content":"<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>opus[1m]</command-args>"}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:10.000Z","message":{
+                "content":"<command-message>exit</command-message>\n<command-name>/exit</command-name>"}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:20.000Z","message":{
+                "content":"<command-message>clear</command-message>\n<command-name>/clear</command-name>\n<command-args></command-args>"}}"#,
+        ]);
+        let s = summarize(None, &t, &[]);
+        assert_eq!(s.user_prompts, 3);
+        let previews: Vec<&str> = s
+            .user_involvement
+            .iter()
+            .map(|i| match i {
+                Involvement::Prompt { preview, .. } => preview.as_str(),
+                other => panic!("expected a prompt, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(previews, ["/model opus[1m]", "/exit", "/clear"]);
+    }
+
+    /// `isMeta` is the harness saying "I wrote this, not the user", and it is
+    /// a strict superset of what the prefix list was reaching for. Excluding
+    /// it must not cost the attachment count, which is a property of the
+    /// record's blocks rather than of who authored it.
+    #[test]
+    fn is_meta_excludes_a_record_no_prefix_would_have_caught() {
+        let t = transcript(&[
+            r#"{"type":"user","isMeta":true,"timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "content":"Continue from where you left off."}}"#,
+            r#"{"type":"user","isMeta":false,"timestamp":"2026-08-20T10:00:10.000Z","message":{
+                "content":"actually, do it this way"}}"#,
+            r#"{"type":"user","isMeta":true,"timestamp":"2026-08-20T10:00:20.000Z","message":{
+                "content":[{"type":"image"},{"type":"text","text":"[Image: original 2160x2880]"}]}}"#,
+        ]);
+        let s = summarize(None, &t, &[]);
+        assert_eq!(s.user_prompts, 1, "only the record the user wrote");
+        // Two phases, not three: the span opens with one (nobody asked for it,
+        // so no opener) and the user's line cuts the second. The trailing
+        // isMeta record cuts nothing, which is the whole fix.
+        assert_eq!(s.phases.len(), 2);
+        assert_eq!(s.phases[0].opened_by, None);
+        assert_eq!(
+            s.phases[1].opened_by.as_deref(),
+            Some("actually, do it this way")
+        );
+        assert_eq!(
+            s.pasted_attachments, 1,
+            "attachments are counted from the blocks, not from authorship"
+        );
+    }
+
+    /// `active_secs` was `wall_secs - idle_secs` — two truncations — while the
+    /// spans truncate once each, so the headline and the strip disagreed by up
+    /// to 198s on the corpus's 209-span session. It is now defined as the sum
+    /// of the span lengths, which makes the identity exact rather than close.
+    #[test]
+    fn active_secs_is_exactly_the_sum_of_the_span_lengths() {
+        let t = transcript(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.900Z"}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:30.800Z"}"#,
+            // a two-hour break, then more work
+            r#"{"type":"user","timestamp":"2026-08-20T12:00:30.700Z"}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T12:00:40.600Z"}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T14:00:40.500Z"}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T14:00:50.400Z"}"#,
+        ]);
+        let s = summarize(None, &t, &[]);
+        assert_eq!(s.activity.spans.len(), 3);
+        assert_eq!(
+            s.active_secs,
+            s.activity.spans.iter().map(|sp| sp.secs).sum::<i64>()
+        );
+        assert_eq!(
+            s.active_secs,
+            s.phases.iter().map(|p| p.secs).sum::<i64>(),
+            "phases tile their spans, so they now tile active time too"
+        );
+        // Three stretches of 29.9s, 9.9s and 9.9s. `wall_secs - idle_secs`
+        // said 51: two truncations over the whole session against one each.
+        assert_eq!(s.active_secs, 47);
+        assert_eq!(s.wall_secs - s.idle_secs, 51);
+    }
+
     /// Editing is a strong signal at a low share: a phase that reads a lot and
     /// edits twice is implementing, because that is what implementing looks
     /// like. Reading with no edit at all is exploring.
@@ -1925,13 +2099,15 @@ mod tests {
 
     /// `promptId` rides on harness-injected records too, so it cannot be the
     /// discriminator. Everything below is the harness talking, not the user.
+    ///
+    /// A `<command-*>` scaffold is deliberately *not* in this list any more —
+    /// it is the one thing on the old prefix list that was the user speaking.
+    /// See `a_command_scaffold_is_read_by_its_tags_not_its_layout`.
     #[test]
     fn harness_injected_context_is_not_user_involvement() {
         let t = transcript(&[
             r#"{"type":"user","promptId":"p1","message":{"content":
                 "<local-command-caveat>Caveat: the messages below"}}"#,
-            r#"{"type":"user","promptId":"p1","message":{"content":
-                "<command-name>/model</command-name>"}}"#,
             r#"{"type":"user","promptId":"p1","message":{"content":
                 "[Image: original 2160x2880, displayed at 1500x2000.]"}}"#,
             r#"{"type":"user","promptId":"p1","message":{"content":[

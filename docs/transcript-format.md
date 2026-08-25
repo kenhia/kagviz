@@ -51,7 +51,7 @@ and never rejects an unknown `type`.
 | `message.model` | Per-turn model id. A session can span several models. |
 | `toolUseResult` | Tool-specific result payload. Shape varies per tool. |
 | `isSidechain` | Older format's subagent marker. Newer versions write `subagents/` files instead and leave this `false`. |
-| `isMeta` | `true` on `user` records the **harness** wrote, not the user — most visibly the body of an invoked skill. See trap 5; kagviz does not read it yet. |
+| `isMeta` | `true` on `user` records the **harness** wrote, not the user — most visibly the body of an invoked skill. Written as an explicit `false` about as often as it is omitted, so read it as "flagged or not", never as present/absent. `is_user_turn` excludes it. See trap 5. |
 
 ## Five traps
 
@@ -70,11 +70,19 @@ Three different things share the `user` channel:
    local-command output (`<local-command-stdout>`, `<local-command-caveat>`),
    `<system-reminder>`, and attachment placeholders (`[Image: original …]`).
 
-> **Correction, sprint 004.** This list used to include `<command-name>` and
-> its siblings as "slash-command scaffolding", and `INJECTED_PREFIXES` still
-> does. That is wrong: `<command-name>` + `<command-args>` is the user's own
-> input in structured form, and discarding it throws away the prompt. See
-> trap 5 — the record that *should* be excluded is the one that follows it.
+> **Corrected in sprint 005.** This list used to include `<command-name>` and
+> its siblings as "slash-command scaffolding", and so did
+> `INJECTED_PREFIXES`. That was wrong: `<command-name>` + `<command-args>` is
+> the user's own input in structured form, and discarding it threw away the
+> prompt. They are off the list, and `command_line` in `src/transcript.rs`
+> reads the typed line back out of them. See trap 5 — the record that
+> *should* be excluded is the one that follows.
+
+The prefix list is now the **narrow** half of the job. `isMeta` is the
+load-bearing half: the harness flags what it wrote, which is more reliable
+than matching the shape of it, and is a strict superset of several prefixes
+that used to be here. A record is the user speaking when it is unflagged *and*
+its content survives the prefix rules.
 
 Worse, injections arrive as **sibling blocks in the same record as real user
 text** — an `<ide_opened_file>` block followed by what the user actually typed.
@@ -193,19 +201,38 @@ being handed to the agent — thousands of characters of instructions that were
 never anyone's prompt.
 
 `isMeta: true` is the reliable marker, and it is **not** a synonym for the
-prefix list: measured over the 405-transcript corpus, 797 user-ish records
-carry it, of which 663 are skill bodies (every skill body has it; none lack
-it) and the remaining 134 are `<local-command-caveat>`, `[Image: …]`,
+prefix list: measured over the 405-transcript corpus, 798 user records carry
+it, of which 663 are skill bodies (every skill body has it; none lack it) and
+the remaining 135 are `<local-command-caveat>`, `[Image: …]`,
 `"Skill /x is already loaded above; instructions unchanged."` and
 `"Continue from where you left off."`. It is a strict superset of several
 prefixes already on the list.
 
-**kagviz currently gets this exactly backwards** — it discards record 1 by
-prefix and counts record 2 as a user turn, so 39% of counted user prompts are
-harness text and 504 real inputs are thrown away corpus-wide. Because phases
-cut at every user turn, each of those also opens a phase boundary that should
-not exist. Not fixed here: it is a **breaking** facts change and is queued as
-korg #1605 / sprint 005, with the measurements.
+**kagviz got this exactly backwards until sprint 005** — it discarded record 1
+by prefix and counted record 2 as a user turn, so a large share of counted user
+prompts were harness text and every real slash-command input was thrown away.
+Because phases cut at every user turn, each of those also opened a phase
+boundary that should not exist.
+
+Fixed in 005, and measured over the 405-transcript corpus before and after:
+
+| | before | after |
+|---|---|---|
+| records counted as a user prompt | 2,012 | **1,831** |
+| …harness bodies among them | 685 | 0 |
+| …real slash-command inputs recovered | 0 | **504** |
+| phases | 4,003 | **3,802** |
+
+The two halves are disjoint — no `<command-*>` record in the corpus carries
+`isMeta` — so neither fix hides a mistake in the other.
+
+Reading record 1 is a *parse*, not a heuristic: the tags reconstruct
+`/start-sprint korg:1586 procceed with implementation` exactly, typo and all.
+Read them by name rather than by position — both tag orders occur, every line
+after the first may be indented by the emitting command, and `<command-args>`
+is sometimes empty (`/clear`) and sometimes absent (`/exit`), which mean the
+same thing. `Base directory for this skill:` needs nothing done to it: it is
+derivable from the skill name, and the facts already carry a `skills` list.
 
 ## Line endings
 

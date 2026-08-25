@@ -1,4 +1,5 @@
 .scratch/
+.sprint-defaults
 .env
 target/
 

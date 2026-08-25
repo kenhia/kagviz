@@ -194,6 +194,16 @@ fn time_strip(h: &mut String, s: &Summary) {
         fmt::duration(a.bucket_secs),
         fmt::duration(crate::summary::IDLE_GAP_SECS),
     ));
+    // The band above the columns names its phase in words only where there is
+    // room for the word. On a session with hundreds of stretches there never
+    // is, so say plainly what carries the kind instead — otherwise a reader
+    // meets a row of colours with no key on the card they are looking at.
+    if !s.phases.is_empty() {
+        h.push_str(
+            "<p class=\"note\">Band colours name the phase kind — the Phases card below \
+             is the key, and every band names itself on hover.</p>\n",
+        );
+    }
     // Break labels need room to sit in; past a dozen stretches there is none,
     // and the durations live in the tooltips instead.
     let roomy = a.spans.len() <= LABELLED_BREAKS_MAX;
@@ -264,6 +274,25 @@ const LABELLED_BREAKS_MAX: usize = 12;
 /// are, and that is the same density at which the whole strip stops being
 /// legible — the fix there is zooming it (#1591), not shaving pixels here.
 const NARROW_BREAKS_MIN: usize = 60;
+
+/// The band width, in CSS pixels, at which a phase label is worth drawing.
+///
+/// Sized for the *longest* label — `implementing`, twelve characters at 9.5px
+/// plus its padding — so a label that is shown is never a clipped one. A
+/// narrower band keeps its colour and its tooltip, and loses only the
+/// fragment that was unreadable anyway.
+///
+/// Unlike the two above, this one cannot be applied here: a band's width is
+/// not a fact about the session, it is what the browser works out from the
+/// flex share, the window and the 2px column floor. The number is therefore
+/// spelled in the `@container` rule in [`CSS`] and mirrored here for the doc
+/// comment; `a_band_too_narrow_for_its_label_shows_colour_and_tooltip_instead`
+/// holds the two in step.
+#[allow(
+    dead_code,
+    reason = "read by that test; the stylesheet is the real use"
+)]
+const BAND_LABEL_MIN_PX: u32 = 64;
 
 /// The phase band over one span's columns.
 ///
@@ -992,10 +1021,18 @@ header dl.meta{max-width:96ch}
 
 /* phase bands, aligned to the columns beneath them */
 .bands{display:flex;gap:1px;padding:0 1px;margin-bottom:3px}
+/* The label is drawn only when the band is wide enough to hold it whole.
+   Only the browser knows that width — it falls out of the flex share, the
+   window and the 2px column floor — so the markup always carries the label
+   and the stylesheet decides whether it is shown. Below the bar the colour
+   and the tooltip carry the kind, which is what they did all along; what goes
+   away is a clipped fragment that carried nothing. A browser without
+   container queries keeps the default and reads the same way. */
 .band{flex:1 1 0;min-width:0;height:15px;border-radius:3px;overflow:hidden;
-  display:flex;align-items:center;justify-content:center}
-.band span{font-size:9.5px;line-height:1;color:var(--ph-ink);letter-spacing:.02em;
-  white-space:nowrap;overflow:hidden;padding:0 2px}
+  display:flex;align-items:center;justify-content:center;container-type:inline-size}
+.band span{display:none;font-size:9.5px;line-height:1;color:var(--ph-ink);
+  letter-spacing:.02em;white-space:nowrap;overflow:hidden;padding:0 2px}
+@container (min-width:64px){ .band span{display:block} }
 .ph-exploring{background:var(--ph-exploring)}
 .ph-implementing{background:var(--ph-implementing)}
 .ph-running{background:var(--ph-running)}
@@ -1366,6 +1403,38 @@ mod tests {
         // And a short one still labels them.
         let html = render_lines(&refs[..5]);
         assert!(html.contains(r#"<div class="strip roomy">"#));
+    }
+
+    /// On the corpus's 209-span session every band is a few pixels wide, so
+    /// every label was clipped to nothing and the band row degraded to an
+    /// unreadable stripe — on exactly the session phases were built to make
+    /// legible. The label is now gated on the band's *rendered* width, which
+    /// only the browser knows, so the markup always carries it and the
+    /// stylesheet decides whether it is shown.
+    #[test]
+    fn a_band_too_narrow_for_its_label_shows_colour_and_tooltip_instead() {
+        let html = render_lines(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "content":"read it"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:30.000Z","message":{
+                "content":[{"type":"tool_use","name":"Read"}]}}"#,
+        ]);
+
+        // The kind is never carried by the label alone: the band's class is
+        // the colour and its tooltip names the phase in words.
+        assert!(html.contains(r#"<div class="band ph-exploring""#));
+        assert!(html.contains("title=\"exploring · "));
+
+        // Hidden by default, shown only once the band is wide enough to hold
+        // the longest label whole. A browser without container queries keeps
+        // the default and falls back to colour and tooltip — the same reading,
+        // never a clipped one.
+        assert!(CSS.contains("container-type:inline-size"));
+        assert!(CSS.contains(".band span{display:none"));
+        assert!(CSS.contains(&format!("@container (min-width:{BAND_LABEL_MIN_PX}px)")));
+
+        // And the reader is told where the colours are named.
+        assert!(html.contains("Band colours name the phase kind"));
     }
 
     /// A 54-day session must not render its wall clock as `1297h15m` — that

@@ -103,8 +103,13 @@ Clippy runs with `-D warnings` over test targets too.
 ### Conventions that are easy to get wrong
 
 - **`promptId` does not mark a user prompt.** It groups every record in a turn,
-  tool results and harness-injected text included. Use `is_user_turn`, and see
-  `INJECTED_PREFIXES`. This one has already been got wrong twice.
+  tool results and harness-injected text included. Use `is_user_turn`. This one
+  has now been got wrong three times, so read `docs/transcript-format.md` traps
+  1 and 5 before touching it — not `INJECTED_PREFIXES` alone, which is only the
+  narrow half. The load-bearing half is **`isMeta`**: the harness flags what it
+  wrote, and that beats matching the shape of it. `<command-*>` is emphatically
+  **not** on the prefix list — it is structure, and `command_line` reads the
+  user's typed line back out of it.
 - **Never report an unknown as a zero.** Shell-based edits leave no recoverable
   diff; they are counted as `opaque_edits`, not folded into the line deltas. A
   number kagviz cannot see must be visibly absent, not silently zero.

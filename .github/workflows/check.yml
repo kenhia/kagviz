@@ -1,0 +1,26 @@
+# The gate, run somewhere other than whoever remembers.
+#
+# `just check` is the whole job — fmt, clippy over every target with warnings
+# denied, and the tests, the golden render over the in-repo fixture included.
+# The corpus sweeps against /ai-data stay where they are; what this proves is
+# what a clone can prove.
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: just check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractor/setup-just@v3
+      - run: just check

@@ -1,0 +1,502 @@
+{
+  "session_id": "fixture-0001",
+  "events": [
+    {
+      "kind": "turn",
+      "at": "2026-08-20T10:00:04Z",
+      "phase": 0,
+      "model": "claude-opus-5",
+      "tokens": {
+        "input": 1200,
+        "output": 80,
+        "thinking": 30,
+        "cache_read": 5000,
+        "cache_write": 400
+      },
+      "tools": 1
+    },
+    {
+      "kind": "tool",
+      "at": "2026-08-20T10:00:04Z",
+      "phase": 0,
+      "tool": "Read",
+      "class": "read",
+      "id": "t1",
+      "input_bytes": 45,
+      "result_at": "2026-08-20T10:00:05Z",
+      "result_bytes": 69
+    },
+    {
+      "kind": "turn",
+      "at": "2026-08-20T10:00:12Z",
+      "phase": 0,
+      "model": "claude-opus-5",
+      "tokens": {
+        "input": 1400,
+        "output": 120,
+        "thinking": 0,
+        "cache_read": 6000,
+        "cache_write": 0
+      },
+      "tools": 2
+    },
+    {
+      "kind": "tool",
+      "at": "2026-08-20T10:00:12Z",
+      "phase": 0,
+      "tool": "Grep",
+      "class": "read",
+      "id": "t2",
+      "input_bytes": 50,
+      "result_at": "2026-08-20T10:00:13Z",
+      "result_bytes": 20
+    },
+    {
+      "kind": "tool",
+      "at": "2026-08-20T10:00:12Z",
+      "phase": 0,
+      "tool": "Bash",
+      "class": "run",
+      "id": "t3",
+      "input_bytes": 71,
+      "result_at": "2026-08-20T10:00:14Z",
+      "result_bytes": 21,
+      "opaque": true
+    },
+    {
+      "kind": "turn",
+      "at": "2026-08-20T10:00:40Z",
+      "phase": 0,
+      "model": "claude-opus-5",
+      "tokens": {
+        "input": 1600,
+        "output": 400,
+        "thinking": 200,
+        "cache_read": 6500,
+        "cache_write": 200
+      },
+      "tools": 1
+    },
+    {
+      "kind": "tool",
+      "at": "2026-08-20T10:00:40Z",
+      "phase": 0,
+      "tool": "Edit",
+      "class": "edit",
+      "id": "t4",
+      "input_bytes": 147,
+      "result_at": "2026-08-20T10:00:41Z",
+      "result_bytes": 69,
+      "files": [
+        "/home/ken/src/example/sync.sh"
+      ],
+      "lines_added": 2,
+      "lines_deleted": 1
+    },
+    {
+      "kind": "turn",
+      "at": "2026-08-20T10:02:36Z",
+      "phase": 1,
+      "model": "claude-opus-5",
+      "tokens": {
+        "input": 1900,
+        "output": 250,
+        "thinking": 40,
+        "cache_read": 7000,
+        "cache_write": 300
+      },
+      "tools": 1
+    },
+    {
+      "kind": "tool",
+      "at": "2026-08-20T10:02:36Z",
+      "phase": 1,
+      "tool": "Write",
+      "class": "edit",
+      "id": "t5",
+      "input_bytes": 183,
+      "result_at": "2026-08-20T10:02:37Z",
+      "result_bytes": 70,
+      "files": [
+        "/home/ken/src/example/tests/dry_run.bats"
+      ],
+      "lines_added": 5,
+      "lines_deleted": 0
+    },
+    {
+      "kind": "turn",
+      "at": "2026-08-20T10:02:45Z",
+      "phase": 1,
+      "model": "claude-opus-5",
+      "tokens": {
+        "input": 2100,
+        "output": 60,
+        "thinking": 0,
+        "cache_read": 7300,
+        "cache_write": 0
+      },
+      "tools": 1
+    },
+    {
+      "kind": "tool",
+      "at": "2026-08-20T10:02:45Z",
+      "phase": 1,
+      "tool": "Bash",
+      "class": "run",
+      "id": "t6",
+      "input_bytes": 55,
+      "result_at": "2026-08-20T10:02:50Z",
+      "failed": true,
+      "result_bytes": 87,
+      "opaque": true
+    },
+    {
+      "kind": "turn",
+      "at": "2026-08-20T10:03:10Z",
+      "phase": 1,
+      "model": "claude-opus-5",
+      "tokens": {
+        "input": 2300,
+        "output": 140,
+        "thinking": 60,
+        "cache_read": 7400,
+        "cache_write": 0
+      },
+      "tools": 1
+    },
+    {
+      "kind": "tool",
+      "at": "2026-08-20T10:03:10Z",
+      "phase": 1,
+      "tool": "AskUserQuestion",
+      "class": "ask",
+      "id": "t7",
+      "input_bytes": 228,
+      "result_at": "2026-08-20T10:03:50Z",
+      "result_bytes": 142
+    },
+    {
+      "kind": "turn",
+      "at": "2026-08-20T10:05:08Z",
+      "phase": 2,
+      "model": "claude-opus-5",
+      "tokens": {
+        "input": 3000,
+        "output": 90,
+        "thinking": 0,
+        "cache_read": 7500,
+        "cache_write": 900
+      },
+      "tools": 2
+    },
+    {
+      "kind": "tool",
+      "at": "2026-08-20T10:05:08Z",
+      "phase": 2,
+      "tool": "Skill",
+      "class": "delegate",
+      "id": "t8",
+      "input_bytes": 31
+    },
+    {
+      "kind": "tool",
+      "at": "2026-08-20T10:05:08Z",
+      "phase": 2,
+      "tool": "Bash",
+      "class": "run",
+      "id": "t9",
+      "input_bytes": 105,
+      "opaque": true
+    },
+    {
+      "kind": "turn",
+      "at": "2026-08-20T12:10:03Z",
+      "phase": 3,
+      "model": "claude-opus-5",
+      "tokens": {
+        "input": 3200,
+        "output": 300,
+        "thinking": 120,
+        "cache_read": 0,
+        "cache_write": 8000
+      },
+      "tools": 1
+    },
+    {
+      "kind": "tool",
+      "at": "2026-08-20T12:10:03Z",
+      "phase": 3,
+      "tool": "Agent",
+      "class": "delegate",
+      "id": "t10",
+      "input_bytes": 145,
+      "result_at": "2026-08-20T12:10:25Z",
+      "result_bytes": 55
+    },
+    {
+      "kind": "turn",
+      "at": "2026-08-20T12:10:30Z",
+      "phase": 3,
+      "model": "claude-opus-5",
+      "tokens": {
+        "input": 3400,
+        "output": 110,
+        "thinking": 0,
+        "cache_read": 8000,
+        "cache_write": 0
+      },
+      "tools": 1
+    },
+    {
+      "kind": "tool",
+      "at": "2026-08-20T12:10:30Z",
+      "phase": 3,
+      "tool": "Agent",
+      "class": "delegate",
+      "id": "t11",
+      "input_bytes": 126,
+      "result_at": "2026-08-20T12:10:31Z",
+      "result_bytes": 33
+    },
+    {
+      "kind": "turn",
+      "at": "2026-08-20T12:10:45Z",
+      "phase": 3,
+      "model": "claude-opus-5",
+      "tokens": {
+        "input": 3500,
+        "output": 180,
+        "thinking": 20,
+        "cache_read": 8100,
+        "cache_write": 0
+      },
+      "tools": 1
+    },
+    {
+      "kind": "tool",
+      "at": "2026-08-20T12:10:45Z",
+      "phase": 3,
+      "tool": "mcp__kaed-kai__edit",
+      "class": "edit",
+      "id": "t12",
+      "input_bytes": 132,
+      "result_at": "2026-08-20T12:10:46Z",
+      "result_bytes": 229,
+      "files": [
+        "src/sync.sh"
+      ],
+      "lines_added": 2,
+      "lines_deleted": 1
+    },
+    {
+      "kind": "turn",
+      "at": "2026-08-20T12:10:50Z",
+      "phase": 3,
+      "model": "claude-opus-5",
+      "tokens": {
+        "input": 3600,
+        "output": 90,
+        "thinking": 0,
+        "cache_read": 8200,
+        "cache_write": 0
+      },
+      "tools": 1
+    },
+    {
+      "kind": "tool",
+      "at": "2026-08-20T12:10:50Z",
+      "phase": 3,
+      "tool": "mcp__kaed-kai__edit",
+      "class": "edit",
+      "id": "t13",
+      "input_bytes": 139,
+      "result_at": "2026-08-20T12:10:51Z",
+      "result_bytes": 58,
+      "files": [
+        "README.md"
+      ],
+      "opaque": true
+    },
+    {
+      "kind": "turn",
+      "at": "2026-08-20T12:11:00Z",
+      "phase": 3,
+      "model": "claude-opus-5",
+      "tokens": {
+        "input": 3700,
+        "output": 70,
+        "thinking": 0,
+        "cache_read": 8300,
+        "cache_write": 0
+      },
+      "tools": 1
+    },
+    {
+      "kind": "tool",
+      "at": "2026-08-20T12:11:00Z",
+      "phase": 3,
+      "tool": "mcp__korg__update_work_item",
+      "class": "org",
+      "id": "t14",
+      "input_bytes": 41,
+      "result_at": "2026-08-20T12:11:01Z",
+      "result_bytes": 41
+    },
+    {
+      "kind": "turn",
+      "at": "2026-08-20T12:12:05Z",
+      "phase": 4,
+      "model": "claude-opus-5",
+      "tokens": {
+        "input": 4100,
+        "output": 60,
+        "thinking": 10,
+        "cache_read": 8300,
+        "cache_write": 1200
+      },
+      "tools": 0
+    },
+    {
+      "kind": "turn",
+      "at": "2026-08-20T12:12:10Z",
+      "phase": 4,
+      "model": "claude-opus-5",
+      "tokens": {
+        "input": 4200,
+        "output": 45,
+        "thinking": 0,
+        "cache_read": 9500,
+        "cache_write": 0
+      },
+      "tools": 1
+    },
+    {
+      "kind": "tool",
+      "at": "2026-08-20T12:12:10Z",
+      "phase": 4,
+      "tool": "Bash",
+      "class": "run",
+      "id": "t15",
+      "input_bytes": 86,
+      "result_at": "2026-08-20T12:12:20Z",
+      "result_bytes": 236,
+      "opaque": true
+    },
+    {
+      "kind": "turn",
+      "at": "2026-08-20T12:12:30Z",
+      "phase": 4,
+      "model": "claude-opus-5",
+      "tokens": {
+        "input": 4300,
+        "output": 33,
+        "thinking": 0,
+        "cache_read": 9600,
+        "cache_write": 0
+      },
+      "tools": 1
+    },
+    {
+      "kind": "tool",
+      "at": "2026-08-20T12:12:30Z",
+      "phase": 4,
+      "tool": "Read",
+      "class": "read",
+      "id": "t16",
+      "input_bytes": 51,
+      "result_at": "2026-08-20T12:12:31Z",
+      "result_bytes": 58
+    },
+    {
+      "kind": "turn",
+      "at": "2026-08-20T12:13:00Z",
+      "phase": 4,
+      "model": "claude-opus-5",
+      "tokens": {
+        "input": 4400,
+        "output": 20,
+        "thinking": 0,
+        "cache_read": 9700,
+        "cache_write": 0
+      },
+      "tools": 0
+    }
+  ],
+  "spawns": [
+    {
+      "agent_id": "ex01",
+      "events": [
+        {
+          "kind": "turn",
+          "at": "2026-08-20T12:10:05Z",
+          "model": "claude-sonnet-5",
+          "tokens": {
+            "input": 2000,
+            "output": 500,
+            "thinking": 200,
+            "cache_read": 0,
+            "cache_write": 1500
+          },
+          "tools": 2
+        },
+        {
+          "kind": "tool",
+          "at": "2026-08-20T12:10:05Z",
+          "tool": "Glob",
+          "class": "read",
+          "id": "s1",
+          "input_bytes": 25,
+          "result_at": "2026-08-20T12:10:08Z",
+          "result_bytes": 43
+        },
+        {
+          "kind": "tool",
+          "at": "2026-08-20T12:10:05Z",
+          "tool": "Grep",
+          "class": "read",
+          "id": "s2",
+          "input_bytes": 56,
+          "result_at": "2026-08-20T12:10:08Z",
+          "failed": true,
+          "result_bytes": 26
+        },
+        {
+          "kind": "turn",
+          "at": "2026-08-20T12:10:12Z",
+          "model": "claude-sonnet-5",
+          "tokens": {
+            "input": 2600,
+            "output": 900,
+            "thinking": 0,
+            "cache_read": 1500,
+            "cache_write": 0
+          },
+          "tools": 1
+        },
+        {
+          "kind": "tool",
+          "at": "2026-08-20T12:10:12Z",
+          "tool": "Read",
+          "class": "read",
+          "id": "s3",
+          "input_bytes": 51,
+          "result_at": "2026-08-20T12:10:14Z",
+          "result_bytes": 58
+        },
+        {
+          "kind": "turn",
+          "at": "2026-08-20T12:10:20Z",
+          "model": "claude-sonnet-5",
+          "tokens": {
+            "input": 2900,
+            "output": 700,
+            "thinking": 50,
+            "cache_read": 1500,
+            "cache_write": 0
+          },
+          "tools": 0
+        }
+      ]
+    }
+  ]
+}

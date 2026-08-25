@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>-home-ken-src-example — 2026-08-20</title>
+<style>
+
+:root{
+  --bg:#faf9f7; --panel:#fff; --ink:#1b1a18; --muted:#6d6a63; --line:#e4e0d9;
+  --accent:#35618f; --bar:#7ea3c9; --fail:#b8412f; --add:#2f7d4f; --del:#b8412f;
+  --user:#4a7c4e; --ask:#a06a1f; --warnbg:#fdf3e6; --chip:#efece6;
+  --ph-ink:#fff;
+  --ph-exploring:#6b93bd; --ph-implementing:#3f8760; --ph-running:#7a6fa6;
+  --ph-filing:#a06a1f; --ph-delegating:#3d8b93; --ph-discussing:#8c887f;
+  --ph-mixed:#a8a299;
+  --said:#7a4fa0; --saidbg:#f3edf8;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#16181a; --panel:#1e2124; --ink:#e6e3dd; --muted:#9a958c; --line:#2f3439;
+    --accent:#7fb0e0; --bar:#5b87b5; --fail:#e07a63; --add:#68b884; --del:#e07a63;
+    --user:#7cb87f; --ask:#d9a34e; --warnbg:#2c2519; --chip:#2a2e33;
+    --ph-ink:#12161a;
+    --ph-exploring:#7fa9d1; --ph-implementing:#63b189; --ph-running:#9d92c9;
+    --ph-filing:#d9a34e; --ph-delegating:#5fb0b8; --ph-discussing:#9a958c;
+    --ph-mixed:#807b73;
+    --said:#b998d8; --saidbg:#2a2334;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+/* A wide monitor is more information, not more background — but only for the
+   panels that can use it. The strip and the card grid take the full width;
+   anything prose-shaped keeps a readable measure with its own max-width. */
+main{max-width:1480px;margin:0 auto;padding:32px 24px 64px}
+h1{font-size:24px;margin:0 0 12px;letter-spacing:-.01em}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);
+  margin:0 0 12px;font-weight:600}
+header{border-bottom:1px solid var(--line);padding-bottom:20px;margin-bottom:20px}
+dl.meta{display:grid;grid-template-columns:auto 1fr;gap:2px 14px;margin:0;font-size:13px}
+dl.meta dt{color:var(--muted)}
+dl.meta dd{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  overflow-wrap:anywhere}
+header dl.meta{max-width:96ch}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:16px 18px;margin-bottom:16px}
+.cols{display:grid;gap:16px;align-items:start;
+  grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.cols>*{min-width:0}
+.cols .card{margin-bottom:16px}
+/* Wide enough for three: the tool bars get the double track they need and the
+   two short panels sit beside them instead of below. */
+@media (min-width:1180px){ .cols{grid-template-columns:2fr 1fr 1fr} }
+.stats{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+.stat{flex:1 1 140px;background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:12px 14px;display:flex;flex-direction:column;gap:2px}
+.stat .k{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.stat .v{font-size:26px;font-weight:600;letter-spacing:-.02em}
+.stat .n{font-size:12px;color:var(--muted)}
+.note{font-size:12.5px;color:var(--muted);margin:0 0 10px}
+/* Model-written text. Deliberately not a .stat and deliberately not a number:
+   a rule down the side, an italic serif face nothing else on the page uses,
+   and its own accent, so the one thing here that was written rather than
+   counted can never be read as one of the counts. */
+.written{border-left:3px solid var(--said);padding:1px 0 1px 16px;margin:0 0 18px;
+  max-width:96ch}
+.written .said{font:italic 21px/1.4 ui-serif,Georgia,"Times New Roman",serif;
+  margin:0 0 5px;color:var(--ink);letter-spacing:-.01em}
+/* The attribution annotates the sentence above it and must not compete with
+   it. The accent rule, the serif face nothing else on the page uses, and the
+   word "written" are three markers already — a bordered chip here was a
+   fourth, and it read louder than the headline. */
+.written .by{font-size:11.5px;color:var(--muted);margin:0}
+.written .by .mark{font-style:italic;font-weight:600;color:var(--said)}
+/* Inline, beside a phase's computed kind, the chip IS the marker and stays —
+   but tinted rather than outlined, so a row of them does not shout. */
+.chip.said{background:var(--saidbg);color:var(--said);border:0;
+  font-style:italic;text-transform:none;letter-spacing:0;vertical-align:baseline}
+.note.unknown{border-left:3px solid var(--ask);padding-left:9px;margin-top:10px}
+.warn{background:var(--warnbg);border:1px solid var(--ask);border-radius:8px;
+  padding:10px 14px;font-size:13px;margin:0 0 16px}
+.big{font-size:22px;font-weight:600;margin:0}
+.add{color:var(--add)} .del{color:var(--del)}
+
+/* time strip */
+.strip{display:flex;align-items:stretch;gap:0;border:1px solid var(--line);
+  border-radius:8px;overflow-x:auto;overflow-y:hidden;background:var(--bg)}
+.span{display:flex;flex-direction:column;min-width:0;flex-shrink:1;flex-basis:0}
+.cols-b{display:flex;align-items:flex-end;height:96px;padding:0 1px}
+/* Columns fill the width when the session fits, floor at 2px when it does not
+   and let the strip scroll — squashing a busy session to nothing would be a
+   quieter lie than making the reader scroll. */
+.col-b{flex:1 1 0;min-width:2px;display:flex;flex-direction:column;justify-content:flex-end;
+  height:100%;padding:0 .5px}
+.col-b .mk{display:block;height:7px;margin-bottom:2px;border-radius:2px}
+.mk.mkuser{background:var(--user)}
+.mk.mkask{background:var(--ask)}
+.track{flex:1;display:flex;align-items:flex-end}
+.col-b .bar{width:100%;background:var(--bar);border-radius:1px 1px 0 0;min-height:1px}
+.col-b .bar.fail{background:var(--fail)}
+/* The axis text is gated on the span's rendered width the way the band label
+   is. A one-column span used to show the first glyph and a half of its
+   timestamp, and two hundred of those made a row of junk under the strip
+   (visible in img-638 on #1591). Narrow: nothing. Room for the duration: the
+   duration, kept right. Room for both: both. The height is fixed so an empty
+   axis still lines up with its neighbours' rules. As a container the axis
+   also has no intrinsic width, so a zoomed span is sized by its columns and
+   never by its own timestamp. */
+.axis{display:flex;justify-content:space-between;font-size:10.5px;line-height:15px;
+  min-height:22px;color:var(--muted);padding:4px 3px 2px;border-top:1px solid var(--line);
+  gap:6px;white-space:nowrap;overflow:hidden;container-type:inline-size}
+.axis span{display:none}
+.axis span:last-child{margin-left:auto}
+@container (min-width:44px){ .axis span:last-child{display:inline} }
+@container (min-width:136px){ .axis span:first-child{display:inline} }
+.gap{display:flex;align-items:center;justify-content:center;
+  background:repeating-linear-gradient(135deg,transparent 0 4px,var(--line) 4px 5px);
+  border-left:1px dashed var(--line);border-right:1px dashed var(--line)}
+.strip.roomy .gap{flex:0 0 32px}
+.strip.dense .gap{flex:0 0 6px}
+/* At this density the dashed borders would be the whole break, so drop them
+   and let the hatch itself be the mark. */
+.strip.packed .gap{flex:0 0 3px;border-left-width:0;border-right-width:0}
+.gap span{font-size:10px;color:var(--muted);background:var(--panel);padding:1px 3px;
+  border-radius:3px;transform:rotate(-90deg);white-space:nowrap}
+/* zoom in (#1614): CSS only, so the report stays self-contained. Checked, the
+   spans stop shrinking and take their content width — which is their
+   columns' width, since the bands and the axis are containers and contribute
+   none of their own — every column takes a fixed readable width, and the
+   strip scrolls. Columns keep flex-grow, so a strip with room to spare still
+   fills it: the zoom only ever widens. With width no longer scarce, packed
+   breaks get their 6px and dashed edges back. */
+.zoom{margin:0 6px 0 0;vertical-align:-1px}
+.zoomctl{display:inline-block;font-size:12.5px;color:var(--muted);margin:0 0 10px;
+  cursor:pointer;user-select:none}
+.zoom:checked ~ .strip .span{flex-basis:auto;flex-shrink:0}
+.zoom:checked ~ .strip .col-b{flex-basis:12px;flex-shrink:0}
+.zoom:checked ~ .strip.packed .gap{flex-basis:6px;border-left-width:1px;border-right-width:1px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);
+  margin:10px 0 0;align-items:center}
+.key{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;
+  vertical-align:-1px}
+.key.bar{background:var(--bar)} .key.barfail{background:var(--fail)}
+.key.mkuser{background:var(--user)} .key.mkask{background:var(--ask)}
+.key.gapkey{background:repeating-linear-gradient(135deg,transparent 0 3px,var(--line) 3px 4px);
+  border:1px solid var(--line)}
+
+/* phase bands, aligned to the columns beneath them */
+.bands{display:flex;gap:1px;padding:0 1px;margin-bottom:3px}
+/* The label is drawn only when the band is wide enough to hold it whole.
+   Only the browser knows that width — it falls out of the flex share, the
+   window and the 2px column floor — so the markup always carries the label
+   and the stylesheet decides whether it is shown. Below the bar the colour
+   and the tooltip carry the kind, which is what they did all along; what goes
+   away is a clipped fragment that carried nothing. A browser without
+   container queries keeps the default and reads the same way. */
+.band{flex:1 1 0;min-width:0;height:15px;border-radius:3px;overflow:hidden;
+  display:flex;align-items:center;justify-content:center;container-type:inline-size}
+.band span{display:none;font-size:9.5px;line-height:1;color:var(--ph-ink);
+  letter-spacing:.02em;white-space:nowrap;overflow:hidden;padding:0 2px}
+@container (min-width:64px){ .band span{display:block} }
+.ph-exploring{background:var(--ph-exploring)}
+.ph-implementing{background:var(--ph-implementing)}
+.ph-running{background:var(--ph-running)}
+.ph-filing{background:var(--ph-filing)}
+.ph-delegating{background:var(--ph-delegating)}
+.ph-discussing{background:var(--ph-discussing)}
+.ph-mixed{background:var(--ph-mixed)}
+ol.phases li{background:none}
+ol.phases li.ph-exploring{border-left-color:var(--ph-exploring)}
+ol.phases li.ph-implementing{border-left-color:var(--ph-implementing)}
+ol.phases li.ph-running{border-left-color:var(--ph-running)}
+ol.phases li.ph-filing{border-left-color:var(--ph-filing)}
+ol.phases li.ph-delegating{border-left-color:var(--ph-delegating)}
+ol.phases li.ph-discussing{border-left-color:var(--ph-discussing)}
+ol.phases li.ph-mixed{border-left-color:var(--ph-mixed)}
+ol.phases .chip.kind{color:var(--ink)}
+ol.phases .resumed{color:var(--muted);font-style:italic}
+ul.bars .fill.ph-exploring{background:var(--ph-exploring)}
+ul.bars .fill.ph-implementing{background:var(--ph-implementing)}
+ul.bars .fill.ph-running{background:var(--ph-running)}
+ul.bars .fill.ph-filing{background:var(--ph-filing)}
+ul.bars .fill.ph-delegating{background:var(--ph-delegating)}
+ul.bars .fill.ph-discussing{background:var(--ph-discussing)}
+ul.bars .fill.ph-mixed{background:var(--ph-mixed)}
+
+/* tool bars */
+ul.bars{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px}
+ul.bars li{display:grid;grid-template-columns:minmax(0,180px) 1fr auto;gap:10px;
+  align-items:center;font-size:13px}
+ul.bars .name{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ul.bars .track{height:9px;background:var(--chip);border-radius:5px;overflow:hidden;display:flex}
+ul.bars .fill{background:var(--bar);height:100%}
+ul.bars .fill.fail{background:var(--fail)}
+ul.bars .n{color:var(--muted);font-variant-numeric:tabular-nums;font-size:12px;white-space:nowrap}
+ul.bars em{color:var(--fail);font-style:normal}
+
+/* involvement */
+ol.turns{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:0}
+ol.turns li{display:grid;grid-template-columns:auto 1fr;gap:12px;padding:7px 0 7px 11px;
+  border-left:3px solid var(--line);font-size:13.5px}
+ol.turns li.prompt{border-left-color:var(--user)}
+ol.turns li.ask{border-left-color:var(--ask)}
+ol.turns .when{color:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums;
+  padding-top:2px;white-space:nowrap}
+ol.turns .what{min-width:0;overflow-wrap:anywhere;max-width:104ch}
+.chose{color:var(--accent);font-weight:600;font-size:12.5px}
+.chose.none{color:var(--muted);font-weight:400;font-style:italic}
+.opts{color:var(--muted);font-size:11.5px}
+.chip{display:inline-block;background:var(--chip);border-radius:4px;padding:1px 6px;
+  font-size:11.5px;color:var(--muted);white-space:nowrap}
+.chip.agent{color:var(--accent)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em}
+footer{color:var(--muted);font-size:11.5px;border-top:1px solid var(--line);
+  padding-top:14px;margin-top:24px}
+
+/* Where a file-change number came from: the audit surface for the adapter
+   table. Deliberately quiet — it is there to be checked, not read. */
+.sources{list-style:none;margin:.7rem 0 0;padding:0;font-size:.82rem}
+.sources li{display:flex;gap:.5rem;align-items:baseline;padding:.18rem 0;
+  border-top:1px solid var(--line)}
+.sources .name{flex:0 0 auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  color:var(--muted);overflow-wrap:anywhere}
+.sources .n{flex:0 0 auto;color:var(--muted);font-variant-numeric:tabular-nums}
+.sources .d{flex:1 1 auto;text-align:right}
+.unseen{color:var(--ask);font-style:italic}
+
+/* The delegated tier. */
+table.tier{width:100%;border-collapse:collapse;font-size:.88rem;margin-top:.4rem}
+table.tier th{text-align:left;font-weight:600;color:var(--muted);font-size:.75rem;
+  text-transform:uppercase;letter-spacing:.04em;padding:.3rem .5rem;
+  border-bottom:1px solid var(--line)}
+table.tier td{padding:.42rem .5rem;border-bottom:1px solid var(--line);
+  vertical-align:top}
+table.tier .r{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+table.tier .sub{display:block;color:var(--muted);font-size:.72rem;margin-top:.15rem;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+p.combined{margin:.7rem 0 .2rem;padding:.55rem .7rem;background:var(--chip);
+  border-radius:6px;font-size:.9rem}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>-home-ken-src-example — 2026-08-20</h1>
+<dl class="meta">
+<dt>session</dt><dd>fixture-0001</dd>
+<dt>cwd</dt><dd>/home/ken/src/example</dd>
+<dt>branch</dt><dd>009-example</dd>
+<dt>cli</dt><dd>2.1.230, 2.1.240</dd>
+<dt>models</dt><dd>claude-opus-5</dd>
+<dt>window</dt><dd>2026-08-20T10:00:00Z → 2026-08-20T12:13:00Z</dd>
+</dl>
+</header>
+<section class="stats">
+<div class="stat"><span class="k">active</span><span class="v">8m</span><span class="n">over 2h13m wall · 2h04m idle</span></div>
+<div class="stat"><span class="k">phases</span><span class="v">5</span><span class="n">mostly implementing</span></div>
+<div class="stat"><span class="k">turns</span><span class="v">16</span><span class="n">4 user prompt(s)</span></div>
+<div class="stat"><span class="k">tools</span><span class="v">16</span><span class="n">2 failed · 6.25% · 3 more delegated</span></div>
+</section>
+<section class="card">
+<h2>Time</h2>
+<p class="note">8m of work in 2 stretch(es), 5s per column. Idle gaps of 2m+ are collapsed to a break.</p>
+<p class="note">Band colours name the phase kind — the Phases card below is the key, and every band names itself on hover.</p>
+<div class="strip roomy">
+<div class="span" style="flex-grow:67">
+<div class="bands"><div class="band ph-implementing" style="flex-grow:30" title="implementing · 08-20 10:00:00 · 2m · 4 tool call(s) — add a --dry-run flag to the sync script"><span>implementing</span></div><div class="band ph-implementing" style="flex-grow:30" title="implementing · 08-20 10:02:30 · 2m · 3 tool call(s), 1 failed — also write a test for it"><span>implementing</span></div><div class="band ph-delegating" style="flex-grow:7" title="delegating · 08-20 10:05:00 · 30s · 2 tool call(s) — /commit wip"><span>delegating</span></div></div>
+<div class="cols-b">
+<div class="col-b" title="08-20 10:00:00 · 2 record(s), 1 tool call(s), 80 out — add a --dry-run flag to the sync script"><i class="mk mkuser"></i><div class="track"><div class="bar" style="height:69%"></div></div></div>
+<div class="col-b" title="08-20 10:00:05 · 1 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:38%"></div></div></div>
+<div class="col-b" title="08-20 10:00:10 · 3 record(s), 2 tool call(s), 120 out"><i class="mk"></i><div class="track"><div class="bar" style="height:100%"></div></div></div>
+<div class="col-b" title="08-20 10:00:15 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:00:20 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:00:25 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:00:30 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:00:35 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:00:40 · 2 record(s), 1 tool call(s), 400 out"><i class="mk"></i><div class="track"><div class="bar" style="height:69%"></div></div></div>
+<div class="col-b" title="08-20 10:00:45 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:00:50 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:00:55 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:01:00 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:01:05 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:01:10 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:01:15 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:01:20 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:01:25 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:01:30 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:01:35 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:01:40 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:01:45 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:01:50 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:01:55 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:02:00 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:02:05 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:02:10 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:02:15 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:02:20 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:02:25 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:02:30 · 1 record(s) — also write a test for it"><i class="mk mkuser"></i><div class="track"><div class="bar" style="height:38%"></div></div></div>
+<div class="col-b" title="08-20 10:02:35 · 2 record(s), 1 tool call(s), 250 out"><i class="mk"></i><div class="track"><div class="bar" style="height:69%"></div></div></div>
+<div class="col-b" title="08-20 10:02:40 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:02:45 · 1 record(s), 1 tool call(s), 60 out"><i class="mk"></i><div class="track"><div class="bar" style="height:38%"></div></div></div>
+<div class="col-b" title="08-20 10:02:50 · 1 record(s), 1 failed"><i class="mk"></i><div class="track"><div class="bar fail" style="height:38%"></div></div></div>
+<div class="col-b" title="08-20 10:02:55 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:03:00 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:03:05 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:03:10 · 1 record(s), 1 tool call(s), 140 out — asked: Keep the flag name --dry-run or use -n?"><i class="mk mkask"></i><div class="track"><div class="bar" style="height:38%"></div></div></div>
+<div class="col-b" title="08-20 10:03:15 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:03:20 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:03:25 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:03:30 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:03:35 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:03:40 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:03:45 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:03:50 · 1 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:38%"></div></div></div>
+<div class="col-b" title="08-20 10:03:55 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:04:00 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:04:05 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:04:10 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:04:15 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:04:20 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:04:25 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:04:30 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:04:35 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:04:40 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:04:45 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:04:50 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:04:55 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:05:00 · 2 record(s) — /commit wip"><i class="mk mkuser"></i><div class="track"><div class="bar" style="height:69%"></div></div></div>
+<div class="col-b" title="08-20 10:05:05 · 1 record(s), 2 tool call(s), 90 out"><i class="mk"></i><div class="track"><div class="bar" style="height:38%"></div></div></div>
+<div class="col-b" title="08-20 10:05:10 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:05:15 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:05:20 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:05:25 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 10:05:30 · 1 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:38%"></div></div></div>
+</div>
+<div class="axis"><span>08-20 10:00:00</span><span>5m</span></div>
+</div>
+<div class="gap" title="2h04m idle"><span>2h04m</span></div>
+<div class="span" style="flex-grow:37">
+<div class="bands"><div class="band ph-delegating" style="flex-grow:24" title="delegating · 08-20 12:10:00 · 2m · 5 tool call(s)"><span>delegating</span></div><div class="band ph-exploring" style="flex-grow:13" title="exploring · 08-20 12:12:00 · 1m · 2 tool call(s), 1 failed — here&#39;s the screenshot of the failing run"><span>exploring</span></div></div>
+<div class="cols-b">
+<div class="col-b" title="08-20 12:10:00 · 2 record(s), 1 tool call(s), 300 out"><i class="mk"></i><div class="track"><div class="bar" style="height:69%"></div></div></div>
+<div class="col-b" title="08-20 12:10:05 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:10:10 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:10:15 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:10:20 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:10:25 · 1 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:38%"></div></div></div>
+<div class="col-b" title="08-20 12:10:30 · 2 record(s), 1 tool call(s), 110 out"><i class="mk"></i><div class="track"><div class="bar" style="height:69%"></div></div></div>
+<div class="col-b" title="08-20 12:10:35 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:10:40 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:10:45 · 2 record(s), 1 tool call(s), 180 out"><i class="mk"></i><div class="track"><div class="bar" style="height:69%"></div></div></div>
+<div class="col-b" title="08-20 12:10:50 · 2 record(s), 1 tool call(s), 90 out"><i class="mk"></i><div class="track"><div class="bar" style="height:69%"></div></div></div>
+<div class="col-b" title="08-20 12:10:55 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:11:00 · 2 record(s), 1 tool call(s), 70 out"><i class="mk"></i><div class="track"><div class="bar" style="height:69%"></div></div></div>
+<div class="col-b" title="08-20 12:11:05 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:11:10 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:11:15 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:11:20 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:11:25 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:11:30 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:11:35 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:11:40 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:11:45 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:11:50 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:11:55 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:12:00 · 1 record(s) — here&#39;s the screenshot of the failing run"><i class="mk mkuser"></i><div class="track"><div class="bar" style="height:38%"></div></div></div>
+<div class="col-b" title="08-20 12:12:05 · 1 record(s), 60 out"><i class="mk"></i><div class="track"><div class="bar" style="height:38%"></div></div></div>
+<div class="col-b" title="08-20 12:12:10 · 1 record(s), 1 tool call(s), 45 out"><i class="mk"></i><div class="track"><div class="bar" style="height:38%"></div></div></div>
+<div class="col-b" title="08-20 12:12:15 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:12:20 · 1 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:38%"></div></div></div>
+<div class="col-b" title="08-20 12:12:25 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:12:30 · 3 record(s), 1 tool call(s), 33 out"><i class="mk"></i><div class="track"><div class="bar" style="height:100%"></div></div></div>
+<div class="col-b" title="08-20 12:12:35 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:12:40 · 1 record(s), 1 failed"><i class="mk"></i><div class="track"><div class="bar fail" style="height:38%"></div></div></div>
+<div class="col-b" title="08-20 12:12:45 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:12:50 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:12:55 · 0 record(s)"><i class="mk"></i><div class="track"><div class="bar" style="height:0%"></div></div></div>
+<div class="col-b" title="08-20 12:13:00 · 1 record(s), 20 out"><i class="mk"></i><div class="track"><div class="bar" style="height:38%"></div></div></div>
+</div>
+<div class="axis"><span>08-20 12:10:00</span><span>3m</span></div>
+</div>
+</div>
+<p class="legend"><span class="key bar"></span>work <span class="key barfail"></span>tool failure <span class="key mkuser"></span>user prompt <span class="key mkask"></span>question asked <span class="key gapkey"></span>idle, collapsed</p>
+</section>
+<section class="card">
+<h2>Phases</h2>
+<p class="note">5 phase(s), cut at every user turn and at every idle break. A phase never spans a gap, and the phases in one stretch of work account for all of it. Labels name the tool mix, not the intent.</p>
+<ul class="bars">
+<li><span class="name">implementing</span><span class="track"><span class="fill ph-implementing" style="width:100.000%"></span></span><span class="n">5m · 2 phase(s)</span></li>
+<li><span class="name">delegating</span><span class="track"><span class="fill ph-delegating" style="width:50.000%"></span></span><span class="n">2m · 2 phase(s)</span></li>
+<li><span class="name">exploring</span><span class="track"><span class="fill ph-exploring" style="width:20.000%"></span></span><span class="n">1m · 1 phase(s)</span></li>
+</ul>
+<ol class="turns phases">
+<li class="ph-implementing"><span class="when">08-20 10:00:00</span><span class="what"><span class="chip kind">implementing</span> <strong>2m</strong> — add a --dry-run flag to the sync script<br><span class="opts">read 2 · edit 1 · run 1</span></span></li>
+<li class="ph-implementing"><span class="when">08-20 10:02:30</span><span class="what"><span class="chip kind">implementing</span> <strong>2m</strong> — also write a test for it<br><span class="opts">ask 1 · edit 1 · run 1</span></span></li>
+<li class="ph-delegating"><span class="when">08-20 10:05:00</span><span class="what"><span class="chip kind">delegating</span> <strong>30s</strong> — /commit wip<br><span class="opts">delegate 1 · run 1</span></span></li>
+<li class="ph-delegating"><span class="when">08-20 12:10:00</span><span class="what"><span class="chip kind">delegating</span> <strong>2m</strong> — <em class="resumed">resumed, nothing said</em><br><span class="opts">delegate 2 · edit 2 · org 1</span></span></li>
+<li class="ph-exploring"><span class="when">08-20 12:12:00</span><span class="what"><span class="chip kind">exploring</span> <strong>1m</strong> — here&#39;s the screenshot of the failing run<br><span class="opts">read 1 · run 1</span></span></li>
+</ol>
+</section>
+<div class="cols">
+<section class="card wide">
+<h2>Tools</h2>
+<ul class="bars">
+<li><span class="name">Bash</span><span class="track"><span class="fill" style="width:75.000%"></span><span class="fill fail" style="width:25.000%"></span></span><span class="n">4 <em>1 failed</em></span></li>
+<li><span class="name">Agent</span><span class="track"><span class="fill" style="width:50.000%"></span><span class="fill fail" style="width:0.000%"></span></span><span class="n">2</span></li>
+<li><span class="name">Read</span><span class="track"><span class="fill" style="width:50.000%"></span><span class="fill fail" style="width:0.000%"></span></span><span class="n">2</span></li>
+<li><span class="name">mcp__kaed-kai__edit</span><span class="track"><span class="fill" style="width:50.000%"></span><span class="fill fail" style="width:0.000%"></span></span><span class="n">2</span></li>
+<li><span class="name">AskUserQuestion</span><span class="track"><span class="fill" style="width:25.000%"></span><span class="fill fail" style="width:0.000%"></span></span><span class="n">1</span></li>
+<li><span class="name">Edit</span><span class="track"><span class="fill" style="width:25.000%"></span><span class="fill fail" style="width:0.000%"></span></span><span class="n">1</span></li>
+<li><span class="name">Grep</span><span class="track"><span class="fill" style="width:25.000%"></span><span class="fill fail" style="width:0.000%"></span></span><span class="n">1</span></li>
+<li><span class="name">Skill</span><span class="track"><span class="fill" style="width:25.000%"></span><span class="fill fail" style="width:0.000%"></span></span><span class="n">1</span></li>
+<li><span class="name">Write</span><span class="track"><span class="fill" style="width:25.000%"></span><span class="fill fail" style="width:0.000%"></span></span><span class="n">1</span></li>
+<li><span class="name">mcp__korg__update_work_item</span><span class="track"><span class="fill" style="width:25.000%"></span><span class="fill fail" style="width:0.000%"></span></span><span class="n">1</span></li>
+</ul>
+<p class="note">1 failure(s) could not be joined to a call — the matching <code>tool_use</code> is not in this transcript.</p>
+</section>
+<section class="card">
+<h2>Files</h2>
+<p class="big">4 file(s) <span class="add">+9</span> <span class="del">−2</span></p>
+<ul class="sources">
+<li><span class="name">Bash</span><span class="n">4×</span><span class="d"><span class="unseen">no readable diff</span></span></li>
+<li><span class="name">mcp__kaed-kai__edit</span><span class="n">2×</span><span class="d">2 file(s) <span class="add">+2</span> <span class="del">−1</span> · <span class="unseen">1 unreadable</span></span></li>
+<li><span class="name">Edit</span><span class="n">1×</span><span class="d">1 file(s) <span class="add">+2</span> <span class="del">−1</span></span></li>
+<li><span class="name">Write</span><span class="n">1×</span><span class="d">1 file(s) <span class="add">+5</span> <span class="del">−0</span></span></li>
+</ul>
+<p class="note unknown">5 call(s) could have changed files and left no recoverable diff. Those edits are <strong>not</strong> in the counts above — an unknown, not a zero.</p>
+</section>
+<section class="card">
+<h2>Tokens</h2>
+<dl class="meta">
+<dt>output</dt><dd>2,048</dd>
+<dt>thinking</dt><dd>480</dd>
+<dt>input</dt><dd>47,900</dd>
+<dt>cache read</dt><dd>116,400</dd>
+<dt>cache write</dt><dd>11,000</dd>
+</dl>
+</section>
+</div>
+<section class="card">
+<h2>User involvement</h2>
+<p class="note">4 prompt(s), 1 question(s) asked, 1 pasted image(s)/document(s).</p>
+<ol class="turns">
+<li class="prompt"><span class="when">08-20 10:00:00</span><span class="what">add a --dry-run flag to the sync script</span></li>
+<li class="prompt"><span class="when">08-20 10:02:30</span><span class="what">also write a test for it</span></li>
+<li class="ask"><span class="when">08-20 10:03:10</span><span class="what"><span class="chip">Flag</span> Keep the flag name --dry-run or use -n?<br><span class="chose">chose: --dry-run</span> <span class="opts">of --dry-run · -n</span></span></li>
+<li class="prompt"><span class="when">08-20 10:05:00</span><span class="what">/commit wip</span></li>
+<li class="prompt"><span class="when">08-20 12:12:00</span><span class="what">here&#39;s the screenshot of the failing run <span class="chip">+1 attached</span></span></li>
+</ol>
+</section>
+<section class="card">
+<h2>Skills &amp; delegation</h2>
+<p><span class="chip">/commit</span> <span class="chip agent">Explore</span> <span class="chip agent">Plan</span> </p>
+</section>
+<section class="card wide">
+<h2>Delegated work</h2>
+<table class="tier">
+<thead><tr><th>agent</th><th>what for</th><th class="r">tools</th><th class="r">active</th><th class="r">output</th></tr></thead>
+<tbody>
+<tr><td><span class="chip agent">Explore</span><span class="sub">claude-sonnet-5</span></td><td>Find other scripts with flags</td><td class="r">3 <em>1 failed</em></td><td class="r">15s</td><td class="r">2,100</td></tr>
+</tbody>
+</table>
+<p class="combined">Session <strong>16</strong> tool call(s) · delegated <strong>3</strong> · <strong>19</strong> combined. Output tokens 2,048 + 2,100 = <strong>4,148</strong>.</p>
+<p class="note">Active time is <strong>not</strong> summed: a subagent runs while the session waits on it, so those seconds overlap rather than add.</p>
+<p class="note unknown">1 spawn(s) left no transcript to read. Their work happened and is <strong>not</strong> in any number here — an unknown, not a zero.</p>
+</section>
+<footer>Generated by kagviz. Every figure is computed from the transcript; nothing here is inferred. Times are UTC.</footer>
+</main>
+</body>
+</html>

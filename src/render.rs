@@ -2,8 +2,10 @@
 //!
 //! Renders from [`Summary`] alone — never from the transcript — so the
 //! extractor/renderer seam stays honest and `kagviz show <id> --json` output
-//! is a valid input. Nothing here computes a number; if a value is not already
-//! in the facts, it does not appear on the page.
+//! is a valid input. Nothing here computes a *fact*: the arithmetic below is
+//! presentation — a peak to scale a bar against, a share of a track, a sum
+//! the contract says any consumer may take — and if a value is not already in
+//! the facts, or a sum of values that are, it does not appear on the page.
 //!
 //! Self-contained is a hard requirement, not a preference: no external fonts,
 //! stylesheets, scripts or images, so the file still renders correctly with no

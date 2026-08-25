@@ -620,11 +620,10 @@ pub fn summarize(
         ..Summary::default()
     };
 
-    // tool_use id -> tool name, so an is_error result can be blamed correctly.
-    let mut tool_names: BTreeMap<String, String> = BTreeMap::new();
-    let mut stamps: Vec<DateTime<Utc>> = Vec::new();
+    // The counts both tiers share — turns, tokens, tool calls, failures, the
+    // file-change tally — through the one accumulator a spawn counts with.
+    let mut counter = Counter::default();
     let mut events: Vec<Event> = Vec::new();
-    let mut tally = ChangeTally::default();
     // AskUserQuestion tool_use id -> the involvement entries it produced, so
     // the answers on its result can be filled in when they arrive.
     let mut open_questions: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -650,8 +649,12 @@ pub fn summarize(
             continue;
         }
         let at = rec.timestamp.as_deref().and_then(parse_stamp);
+        let counted = counter.count(rec);
         let mut event = Event {
             at,
+            tool_calls: counted.tool_calls,
+            tool_failures: counted.tool_failures,
+            output_tokens: counted.output_tokens,
             ..Event::default()
         };
 
@@ -667,38 +670,23 @@ pub fn summarize(
         if s.git_branch.is_none() {
             s.git_branch.clone_from(&rec.git_branch);
         }
-        if let Some(ts) = at {
-            stamps.push(ts);
-        }
-
+        // What a session has that a spawn does not, layered *beside* the
+        // shared count rather than inside it: the tool mix a phase is named
+        // from, and the structure — questions, skills, spawns — joined later.
         if rec.kind == "assistant"
             && let Some(msg) = &rec.message
         {
-            s.assistant_turns += 1;
             if let Some(model) = &msg.model {
                 *s.models.entry(model.clone()).or_default() += 1;
-            }
-            if let Some(u) = msg.usage {
-                s.tokens.input += u.input_tokens;
-                s.tokens.output += u.output_tokens;
-                s.tokens.thinking += u.output_tokens_details.thinking_tokens;
-                s.tokens.cache_read += u.cache_read_input_tokens;
-                s.tokens.cache_write += u.cache_creation_input_tokens;
-                event.output_tokens += u.output_tokens;
             }
             for block in msg.content.blocks() {
                 if block.kind != "tool_use" {
                     continue;
                 }
-                let Some(name) = block.name.clone() else {
+                let Some(name) = &block.name else {
                     continue;
                 };
-                *s.tool_calls.entry(name.clone()).or_default() += 1;
-                event.tool_calls += 1;
-                event.mix.add(classify_tool(&name));
-                if let Some(id) = &block.id {
-                    tool_names.insert(id.clone(), name.clone());
-                }
+                event.mix.add(classify_tool(name));
                 match name.as_str() {
                     "AskUserQuestion" => {
                         s.ask_user_questions += 1;
@@ -754,16 +742,6 @@ pub fn summarize(
                 if block.kind != "tool_result" {
                     continue;
                 }
-                if block.is_error.unwrap_or(false) {
-                    let name = block
-                        .tool_use_id
-                        .as_ref()
-                        .and_then(|id| tool_names.get(id))
-                        .cloned()
-                        .unwrap_or_else(|| "<unknown>".to_string());
-                    *s.tool_failures.entry(name).or_default() += 1;
-                    event.tool_failures += 1;
-                }
                 if let Some(id) = &block.tool_use_id
                     && let Some(indices) = open_questions.remove(id)
                 {
@@ -799,43 +777,26 @@ pub fn summarize(
             }
         }
 
-        if let Some(result) = &rec.tool_use_result {
-            // The tally is keyed by tool, and the name lives on the *call*, so
-            // it is joined through `tool_use_id` exactly as failures are. A
-            // result whose call is not in this file reads as `<unknown>`,
-            // which still gets the default adapter — the same reading it got
-            // before there was a table.
-            let (tool, failed) = result_call(rec, &tool_names).unwrap_or(("<unknown>", false));
-            tally.absorb(tool, result, failed);
-        }
-
         if event.at.is_some() {
             events.push(event);
         }
     }
 
-    // Shell tools that ran at all. Counted as "could have changed files
-    // unseen", never as changes. Every one of them is opaque by construction,
-    // so they are added from the call tally rather than from results — an
-    // interrupted `Bash` leaves no result and is still an edit kagviz cannot
-    // see.
-    for (name, n) in &s.tool_calls {
-        if may_edit_opaquely(name) {
-            tally.opaque(name, *n as usize);
-        }
+    let counts = counter.finish();
+    if let Some((first, last)) = counts.window() {
+        s.started = Some(first);
+        s.ended = Some(last);
+        (s.wall_secs, s.idle_secs) = wall_and_idle(&counts.stamps);
     }
-    s.changes = tally.finish();
+    s.assistant_turns = counts.assistant_turns;
+    s.tool_calls = counts.tool_calls;
+    s.tool_failures = counts.tool_failures;
+    s.tokens = counts.tokens;
+    s.changes = counts.changes;
 
     s.skills.sort();
     s.skills.dedup();
     s.subagents.sort();
-
-    stamps.sort_unstable();
-    if let (Some(first), Some(last)) = (stamps.first(), stamps.last()) {
-        s.started = Some(*first);
-        s.ended = Some(*last);
-        (s.wall_secs, s.idle_secs) = wall_and_idle(&stamps);
-    }
 
     s.delegation = build_delegation(subagents, &inline, &spawn_meta, agent_call_total);
 
@@ -1001,39 +962,106 @@ fn summarize_spawn(records: &[&Record], skipped: usize, sidecar: bool) -> (Spawn
         skipped_lines: skipped,
         ..Spawn::default()
     };
-    let mut tool_names: BTreeMap<String, String> = BTreeMap::new();
-    let mut tally = ChangeTally::default();
-    let mut stamps: Vec<DateTime<Utc>> = Vec::new();
-
+    let mut counter = Counter::default();
     for rec in records {
         if spawn.agent_id.is_none() {
             spawn.agent_id.clone_from(&rec.agent_id);
         }
+        counter.count(rec);
+    }
+
+    let counts = counter.finish();
+    if let Some((first, last)) = counts.window() {
+        spawn.started = Some(first);
+        spawn.ended = Some(last);
+        spawn.active_secs = active_from_stretches(&counts.stamps);
+    }
+    spawn.assistant_turns = counts.assistant_turns;
+    spawn.tool_calls = counts.tool_calls;
+    spawn.tool_failures = counts.tool_failures;
+    spawn.tokens = counts.tokens;
+    spawn.changes = counts.changes;
+    (spawn, counts.tally)
+}
+
+/// The per-record count both tiers are built from.
+///
+/// [`summarize`] and [`summarize_spawn`] used to carry two copies of this
+/// walk — turns, tokens, tool calls, failures blamed through the call table,
+/// the file-change tally — and a quantity added to one and not the other
+/// silently made the tiers non-comparable. There is one walk now. What a
+/// session has that a spawn does not (user turns, phases, involvement, the
+/// delegated tier itself) is layered on *beside* it by `summarize`, never
+/// inside it, so the numbers the two tiers print side by side are counted by
+/// the same code.
+#[derive(Debug, Default)]
+struct Counter {
+    /// tool_use id -> tool name, so a result can be blamed on its call.
+    tool_names: BTreeMap<String, String>,
+    /// Every timestamp seen, in record order until [`Counter::finish`].
+    stamps: Vec<DateTime<Utc>>,
+    assistant_turns: usize,
+    tool_calls: BTreeMap<String, u32>,
+    tool_failures: BTreeMap<String, u32>,
+    tokens: TokenTotals,
+    changes: ChangeTally,
+}
+
+/// What one record contributed: the slice of the count a bucket or a phase
+/// is built from.
+#[derive(Debug, Default, Clone, Copy)]
+struct Counted {
+    tool_calls: u32,
+    tool_failures: u32,
+    output_tokens: u64,
+}
+
+/// A finished pass, ready to be carried by either tier.
+#[derive(Debug)]
+struct Counts {
+    assistant_turns: usize,
+    tool_calls: BTreeMap<String, u32>,
+    tool_failures: BTreeMap<String, u32>,
+    tokens: TokenTotals,
+    changes: FileChanges,
+    /// The tally behind `changes`, kept so a spawn's can be merged into the
+    /// tier's without re-reading anything.
+    tally: ChangeTally,
+    /// Sorted.
+    stamps: Vec<DateTime<Utc>>,
+}
+
+impl Counter {
+    /// Count one record.
+    fn count(&mut self, rec: &Record) -> Counted {
+        let mut counted = Counted::default();
         if let Some(at) = rec.timestamp.as_deref().and_then(parse_stamp) {
-            stamps.push(at);
+            self.stamps.push(at);
         }
 
         if rec.kind == "assistant"
             && let Some(msg) = &rec.message
         {
-            spawn.assistant_turns += 1;
+            self.assistant_turns += 1;
             if let Some(u) = msg.usage {
-                spawn.tokens.input += u.input_tokens;
-                spawn.tokens.output += u.output_tokens;
-                spawn.tokens.thinking += u.output_tokens_details.thinking_tokens;
-                spawn.tokens.cache_read += u.cache_read_input_tokens;
-                spawn.tokens.cache_write += u.cache_creation_input_tokens;
+                self.tokens.input += u.input_tokens;
+                self.tokens.output += u.output_tokens;
+                self.tokens.thinking += u.output_tokens_details.thinking_tokens;
+                self.tokens.cache_read += u.cache_read_input_tokens;
+                self.tokens.cache_write += u.cache_creation_input_tokens;
+                counted.output_tokens += u.output_tokens;
             }
             for block in msg.content.blocks() {
                 if block.kind != "tool_use" {
                     continue;
                 }
-                let Some(name) = block.name.clone() else {
+                let Some(name) = &block.name else {
                     continue;
                 };
-                *spawn.tool_calls.entry(name.clone()).or_default() += 1;
+                *self.tool_calls.entry(name.clone()).or_default() += 1;
+                counted.tool_calls += 1;
                 if let Some(id) = &block.id {
-                    tool_names.insert(id.clone(), name);
+                    self.tool_names.insert(id.clone(), name.clone());
                 }
             }
         }
@@ -1046,34 +1074,58 @@ fn summarize_spawn(records: &[&Record], skipped: usize, sidecar: bool) -> (Spawn
                     let name = block
                         .tool_use_id
                         .as_ref()
-                        .and_then(|id| tool_names.get(id))
+                        .and_then(|id| self.tool_names.get(id))
                         .cloned()
                         .unwrap_or_else(|| "<unknown>".to_string());
-                    *spawn.tool_failures.entry(name).or_default() += 1;
+                    *self.tool_failures.entry(name).or_default() += 1;
+                    counted.tool_failures += 1;
                 }
             }
         }
 
         if let Some(result) = &rec.tool_use_result {
-            let (tool, failed) = result_call(rec, &tool_names).unwrap_or(("<unknown>", false));
-            tally.absorb(tool, result, failed);
+            // The tally is keyed by tool, and the name lives on the *call*, so
+            // it is joined through `tool_use_id` exactly as failures are. A
+            // result whose call is not in this file reads as `<unknown>`,
+            // which still gets the default adapter — the same reading it got
+            // before there was a table.
+            let (tool, failed) = result_call(rec, &self.tool_names).unwrap_or(("<unknown>", false));
+            self.changes.absorb(tool, result, failed);
         }
+        counted
     }
 
-    for (name, n) in &spawn.tool_calls {
-        if may_edit_opaquely(name) {
-            tally.opaque(name, *n as usize);
+    /// Close the pass.
+    ///
+    /// Shell tools that ran at all are counted as "could have changed files
+    /// unseen", never as changes. Every one of them is opaque by construction,
+    /// so they are added from the call tally rather than from results — an
+    /// interrupted `Bash` leaves no result and is still an edit kagviz cannot
+    /// see.
+    fn finish(mut self) -> Counts {
+        for (name, n) in &self.tool_calls {
+            if may_edit_opaquely(name) {
+                self.changes.opaque(name, *n as usize);
+            }
+        }
+        self.stamps.sort_unstable();
+        Counts {
+            assistant_turns: self.assistant_turns,
+            tool_calls: self.tool_calls,
+            tool_failures: self.tool_failures,
+            tokens: self.tokens,
+            changes: self.changes.finish(),
+            tally: self.changes,
+            stamps: self.stamps,
         }
     }
-    spawn.changes = tally.finish();
+}
 
-    stamps.sort_unstable();
-    if let (Some(first), Some(last)) = (stamps.first(), stamps.last()) {
-        spawn.started = Some(*first);
-        spawn.ended = Some(*last);
-        spawn.active_secs = active_from_stretches(&stamps);
+impl Counts {
+    /// First and last timestamp, when there was one.
+    fn window(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        Some((*self.stamps.first()?, *self.stamps.last()?))
     }
-    (spawn, tally)
 }
 
 /// One record's contribution to the activity series and the phase cut.

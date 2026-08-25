@@ -111,9 +111,9 @@ pub struct Message {
 #[derive(Debug, Deserialize, Default)]
 #[serde(untagged)]
 pub enum Content {
-    /// The prompt text itself. Captured so the string and block forms stay
-    /// distinguishable; read once prompts are rendered on the timeline.
-    Text(#[allow(dead_code, reason = "read by tests; rendered once prompts land")] String),
+    /// The prompt text itself — what `is_user_turn` classifies and
+    /// `preview_of` labels a turn with.
+    Text(String),
     Blocks(Vec<Block>),
     #[default]
     Empty,

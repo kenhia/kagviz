@@ -355,7 +355,7 @@ lets a renderer collapse it.
 from a fixed ladder (5s → 1800s) as the narrowest width that keeps the whole
 series under 240 buckets, so a ten-minute session and a ten-hour one both
 render legibly and two renderings of one session can never disagree about the
-scale. Measured over 305 transcripts, the ladder has never bottomed out.
+scale. Measured over 405 transcripts, the ladder has never bottomed out.
 
 Buckets carry counts only. What the work *was* is deliberately absent:
 segmentation and labelling are later work, and neither belongs in a bucket.

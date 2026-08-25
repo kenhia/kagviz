@@ -348,6 +348,7 @@ pub struct Phase {
     pub mix: ToolMix,
     /// Preview of the user turn that opened this phase. Absent when the phase
     /// opens a resumed span instead — work picked up again with nothing said.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub opened_by: Option<String>,
 }
 
@@ -362,6 +363,7 @@ pub struct Phase {
 pub enum Involvement {
     /// The user said something — typed text, a pasted image, or both.
     Prompt {
+        #[serde(skip_serializing_if = "Option::is_none")]
         at: Option<DateTime<Utc>>,
         /// The first [`PREVIEW_CHARS`] characters, whitespace collapsed.
         preview: String,
@@ -372,10 +374,13 @@ pub enum Involvement {
     /// The agent stopped and asked. `chosen` is absent when the transcript
     /// holds no answer — an interrupted question, not a silent one.
     Question {
+        #[serde(skip_serializing_if = "Option::is_none")]
         at: Option<DateTime<Utc>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         header: Option<String>,
         question: String,
         options: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         chosen: Option<String>,
     },
 }
@@ -398,20 +403,26 @@ impl Involvement {
 #[serde(default)]
 pub struct Spawn {
     /// Joins the sidecar file, its records, and the parent's `Agent` result.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
     /// From the parent's `Agent` call input, when the spawn could be joined.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub subagent_type: Option<String>,
     /// From the parent's `Agent` result — what the agent was asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// `resolvedModel` from the parent's `Agent` result. A delegated turn can
     /// run on a different model than the session it was spawned from, which is
     /// exactly the kind of cost a reader wants to see.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// True when the numbers came from a `subagents/agent-*.jsonl` sidecar,
     /// false when they came from `isSidechain` records inlined in the parent
     /// by an older CLI.
     pub sidecar: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub started: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ended: Option<DateTime<Utc>>,
     /// Wall span less idle gaps, by the same [`IDLE_GAP_SECS`] rule the parent
     /// uses. **Not** addable to the parent's `active_secs`: a subagent runs
@@ -470,14 +481,20 @@ impl Delegation {
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Summary {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub git_branch: Option<String>,
     pub cli_versions: BTreeSet<String>,
     pub models: BTreeMap<String, u32>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub started: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ended: Option<DateTime<Utc>>,
     pub wall_secs: i64,
     pub active_secs: i64,
@@ -797,6 +814,7 @@ pub fn summarize(
     s.skills.sort();
     s.skills.dedup();
     s.subagents.sort();
+    s.subagents.dedup();
 
     s.delegation = build_delegation(subagents, &inline, &spawn_meta, agent_call_total);
 
@@ -2676,15 +2694,91 @@ mod tests {
         );
     }
 
+    /// `skills` and `subagents` are the *set* of what was invoked. Two
+    /// `Explore` spawns are one kind of delegate — and one chip on the page —
+    /// and how many there were is `delegation`'s to say (sprint 009).
     #[test]
     fn user_involvement_and_delegation_are_picked_up() {
         let t = transcript(&[r#"{"type":"assistant","message":{"content":[
                 {"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{}},
                 {"type":"tool_use","id":"t2","name":"Skill","input":{"skill":"sprint-ship"}},
-                {"type":"tool_use","id":"t3","name":"Agent","input":{"subagent_type":"Explore"}}]}}"#]);
+                {"type":"tool_use","id":"t3","name":"Agent","input":{"subagent_type":"Explore"}},
+                {"type":"tool_use","id":"t4","name":"Agent","input":{"subagent_type":"Explore"}}]}}"#]);
         let s = summarize(None, &t, &[]);
         assert_eq!(s.ask_user_questions, 1);
         assert_eq!(s.skills, vec!["sprint-ship"]);
-        assert_eq!(s.subagents, vec!["Explore"]);
+        assert_eq!(s.subagents, vec!["Explore"], "the set, not the calls");
+        assert_eq!(
+            s.delegation.unjoined_spawns, 2,
+            "the count lives in the tier"
+        );
+    }
+
+    /// The contract promised absent-not-`null` from the day it was written,
+    /// and the serializer kept that promise only for `labels` until sprint
+    /// 009. Every optional field the document carries is exercised empty
+    /// here — no identity fields, a resumed phase, a question with no header
+    /// and no answer, a sidecar no `Agent` result joins — and none of them
+    /// may reach the document as a key.
+    #[test]
+    fn optional_fields_are_absent_rather_than_null() {
+        let t = transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:00.000Z","message":{"content":[
+                {"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[
+                    {"question":"Ship?","options":[{"label":"Yes"}]}]}}]}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:05.000Z","message":{"content":[
+                {"type":"tool_result","tool_use_id":"t1","is_error":true}]}}"#,
+        ]);
+        let orphan = subagent(
+            "lonely",
+            &[
+                r#"{"type":"assistant","timestamp":"2026-08-20T10:00:02.000Z","message":{
+                "content":[{"type":"tool_use","id":"s1","name":"Read"}]}}"#,
+            ],
+        );
+        let s = summarize(None, &t, &[orphan]);
+        assert!(s.cwd.is_none() && s.git_branch.is_none() && s.session_id.is_none());
+        assert_eq!(
+            s.phases[0].opened_by, None,
+            "the span opened with nobody asking"
+        );
+        assert!(matches!(
+            &s.user_involvement[0],
+            Involvement::Question {
+                header: None,
+                chosen: None,
+                ..
+            }
+        ));
+        assert_eq!(s.delegation.spawns[0].subagent_type, None);
+
+        let json = serde_json::to_string_pretty(&s).unwrap();
+        assert!(
+            !json.contains("null"),
+            "a null reached the document:\n{json}"
+        );
+        for key in [
+            "cwd",
+            "git_branch",
+            "session_id",
+            "project",
+            "opened_by",
+            "header",
+            "chosen",
+            "subagent_type",
+            "description",
+            "model",
+        ] {
+            assert!(
+                !json.contains(&format!("\"{key}\"")),
+                "`{key}` was emitted with nothing to say"
+            );
+        }
+        // And absent reads back as absent — the round trip the renderer and
+        // the index both depend on.
+        let back: Summary = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.phases[0].opened_by, None);
+        assert_eq!(back.delegation.spawns[0].subagent_type, None);
+        assert_eq!(back.cwd, None);
     }
 }

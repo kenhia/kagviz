@@ -17,6 +17,10 @@ Treat it as a contract:
 - **An unknown is never rendered as a zero.** Where kagviz cannot see
   something, the document says so with a separate field (see `opaque_edits`)
   rather than reporting a confident number it does not have.
+- **An optional field is absent, never `null`.** A resumed phase has no
+  `opened_by` key; an unanswered question has no `chosen`; a spawn that could
+  not be joined has no `subagent_type`. A consumer must treat a missing key
+  and a `null` the same way — and since 009 it only ever sees the first.
 
 ### Breaking changes, in order
 
@@ -28,10 +32,14 @@ whether it is affected without re-deriving anything.
 |---|---|---|
 | 005 | `user_prompts`, `phases`, `user_involvement` and `activity…buckets[].user_turns` stop counting harness-written records (`isMeta`) and start counting slash-command invocations. | `user_prompts` 2,012 → **1,831**: 685 harness bodies dropped, 504 real user inputs recovered. `phases` 4,003 → **3,802**. |
 | 005 | `active_secs` is redefined as the sum of the span lengths — see below. | 560,283s → **558,730s**; 305 of 405 sessions corrected, every one downward, worst −198s. |
+| 009 | Optional fields are **absent** instead of `null` — every `Option` the document carries: `opened_by`, `chosen`, `header`, `at`, a spawn's `agent_id`/`subagent_type`/`description`/`model`/`started`/`ended`, the top-level `session_id`/`project`/`cwd`/`git_branch`/`started`/`ended`. The contract had promised this since it was written; the serializer only kept it for `labels`. | Bytes change on **397 of 405** sessions; **no value moves**. What had been `null`: `opened_by` 1,971 times (resumed phases), `chosen` 6, `subagent_type` and `description` 5 each (unjoined spawns), `cwd`/`git_branch`/`started`/`ended` once each (one session with no timestamped record). |
+| 009 | `subagents` is the sorted **set** of subagent types invoked, one entry each — as `skills` already was. How many times is `tool_calls` and `delegation`'s job. | 8 of 405 sessions: 21 entries → 9 (`Explore,Explore` → `Explore`). |
 
-Nothing else moved: `wall_secs`, `idle_secs`, `tokens`, `tool_calls`,
-`tool_failures`, `changes` and the span boundaries themselves are
-byte-identical across the change.
+Each row names what it did *not* touch as precisely as what it did. 005 left
+`wall_secs`, `idle_secs`, `tokens`, `tool_calls`, `tool_failures`, `changes`
+and the span boundaries byte-identical. 009 moved no value at all: strip the
+`null`s from the a8dad05 baseline and dedup its `subagents`, and every one of
+the 405 documents is byte-identical to the new output.
 
 The renderer round-trips it: a report built from a serialized facts document is
 byte-identical to one built from the summary in memory, and byte-identical
@@ -68,7 +76,7 @@ Volume and outcome:
 | `tool_calls`, `tool_failures` | tool name → count. Failures are joined to their call by `tool_use_id`; a failure whose call is not in the file is blamed on `<unknown>` rather than dropped. |
 | `tokens` | input / output / thinking / cache read / cache write. |
 | `changes` | `files_touched`, `lines_added`, `lines_deleted` recovered from a diff, plus `opaque_edits` and a per-tool `by_tool` breakdown. |
-| `skills`, `subagents`, `subagent_transcripts` | What the session delegated to. The delegated *work* is in `delegation`. |
+| `skills`, `subagents`, `subagent_transcripts` | What the session delegated to: the sorted set of skill names and of subagent types invoked, one entry each (`subagents` since 009). The delegated *work* — and how many spawns there were — is in `delegation`. |
 | `labels` | **Absent unless asked for.** The one model-written field — see below. |
 
 ### `changes` — exact, or visibly absent
@@ -321,9 +329,10 @@ be added later without breaking a consumer.
 | `facts`, `report` | Paths relative to the derived root, which is the served root. |
 | `source_digest`, `kagviz` | From `state.json`: the sha256 over the transcript bytes the facts were derived from, and the kagviz version that derived them. Absent only for a facts file the derive did not write (dropped in by hand). |
 
-**Optional fields are absent, never `null`.** This contract keeps from the
-start what the facts document promises and does not yet fully deliver (the
-`null`-vs-absent drift found in review 006 is queued for sprint 009).
+**Optional fields are absent, never `null`.** This contract kept from the
+start what the facts document had promised and, until 009, did not fully
+deliver — the `null`-vs-absent drift review 006 found was closed there, and
+the two documents now follow one rule.
 
 Ordering is by `started`, newest first, then host, then id — stable across
 runs, so the file is byte-identical when nothing was derived.

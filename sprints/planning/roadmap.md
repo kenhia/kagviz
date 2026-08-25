@@ -7,6 +7,12 @@ kagviz turns a session transcript into insight about how the agent worked.
 The governing split: **everything countable is computed deterministically; a
 model is used only to write the headline over facts already established.**
 
+The destination, named at the MVP+ review (006): an **app** — bring up a
+session from anywhere on the homelab, inspect it, dig in. Click a timeline
+segment and see its records and tool calls, and which failed. The facts JSON
+is the seam the whole plan hangs on, which is why it has been a contract
+since day one.
+
 ## Shipped
 
 - **Sprint 001 — static HTML report.** `kagviz render <session-id>` emits a
@@ -47,30 +53,71 @@ model is used only to write the headline over facts already established.**
   additive against the pinned corpus: 405/405 sessions byte-identical to the
   sprint-003 baseline. See `sprints/004-headline-pass.md`.
 
+- **Sprint 005 — the facts stop disagreeing with themselves.** The first
+  breaking facts change since the contract was written, landed the way the
+  contract demands: measured. `isMeta` records stop counting as prompts and
+  slash commands start counting as the line the user typed (`user_prompts`
+  2,012 → 1,831 over the corpus); `active_secs` is redefined as the sum of
+  the span lengths, so `active_secs == Σ spans == Σ phases` holds by
+  construction; a band too narrow for its label shows colour and tooltip
+  instead of clipped garbage. Everything else byte-identical, and the sprint
+  record names both halves. See `sprints/005-facts-stop-disagreeing.md`.
+
+- **Sprint 006 — the MVP+ review.** First formal review:
+  `sprints/review/006-mvp-plus-review.md`. Direction verdict: on course, and
+  the two early bets (facts-as-contract, determinism + pinned baselines) are
+  the reason. Named the four gaps between today's tool and the app — sessions
+  don't survive the CLI's ~30-day prune, no browse surface, no detail below
+  the bucket, no interaction layer — and queued the work below.
+
 ## Now
 
-- Nothing in flight. The live queue is korg's Planning page; the entries below
-  are what this roadmap expects to see there.
+- **Sprint 007 — collect the fleet, nightly.** The priority: transcripts
+  self-prune at the source, so collection is what makes history exist.
+  A live, accumulating mirror per host under `/ai-data/kagviz-data/live/`
+  (kai, kubs0, cleo → kai's local volume), synced by tooling that runs
+  manually and from a systemd user timer at 04:00 America/Los_Angeles; a
+  derive stage that computes facts + reports for new/updated sessions and
+  regenerates a cross-host session index; the index served on the tailnet
+  (copyparty already serves exactly this kind of page). Design in review 006,
+  thread 1.
 
 ## Next
 
+- **Report legibility quick wins (sprint 008).** #1590 (failure rate beside
+  the count) and the #1591 interim: a zoom-in checkbox rendering dense strips
+  at readable element size in a horizontal scroller — CSS `:checked` only, so
+  the report stays self-contained with no JS.
+
+- **The facts learn detail (sprint 009).** The contract work the app needs:
+  a per-event detail tier (tool calls with name, timing, outcome) so a
+  timeline segment can answer a click — leaning a *separate document* under
+  the same contract discipline, so the summary stays light and detail loads
+  on demand; the `MAX_BUCKETS` ceiling gets revisited here. Bundled with the
+  contract hygiene the 006 review found, so one baseline regeneration covers
+  it all: emit absent-not-null as the contract already promises, one shared
+  accumulator for both counting tiers, and the in-repo fixture + CI + golden
+  render test that make the guarantees reproducible from a clone.
+
 - **Reconcile shell edits, honestly or not at all.** The `opaque_edits` gap is
-  now the *only* undercount left, and it is the hard one: nothing in the
-  transcript bytes can see a `sed -i`. Two separable pieces — narrow
-  `opaque_edits` to shell calls that plausibly wrote (deterministic, from the
-  command string), and a `git diff` figure that would have to be a separately
-  named, clearly *inferred* field.
+  the one remaining undercount, and the hard one: nothing in the transcript
+  bytes can see a `sed -i`. Two separable pieces — narrow `opaque_edits` to
+  shell calls that plausibly wrote (deterministic, from the command string),
+  and a `git diff` figure that would have to be a separately named, clearly
+  *inferred* field.
 
 ## Later / Ideas
 
-- **Interactive report** — the real goal: pan the timeline, zoom from the whole
-  session down to a phase, a turn, a single tool call. Forest, tree, leaf.
-  Likely a TS front-end over the same facts JSON, which is why that JSON is
-  treated as a contract from day one. The zoom half is now queued as #1591:
-  sprint 002 confirmed that a wider page is *not* a substitute for it.
-- Cross-session views: how a project's sessions trend over time.
+- **Interactive front-end v1** — the app itself: a TS SPA in `web/`, served
+  static from the same host as the collected data, reading the session index
+  → facts → events over HTTP with no backend. Timeline pan/zoom (#1591
+  proper: forest, tree, leaf), click a segment for the drill-down. Queued as
+  a WI; propose once 007 and 009 have landed and the events document's shape
+  is proven.
+- Cross-session views: how a project's sessions trend over time — the
+  collected `live/` store is what makes this possible at all.
 - Compare two sessions side by side (the harness-eval use case).
 - Feed reports to `ai-findings` as ready-made infographics.
 - Consume `tool-results/*.txt` overflow for content-level analysis.
-- Ship a hand-minimised, secret-cleaned fixture *in the repo*, so the corpus
-  sweep is reproducible without access to `/ai-data`.
+- Run `--label` in the nightly derive when kvllm is up, and judge the prose
+  against a real model (sprint 004's open live-fire check).

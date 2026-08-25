@@ -126,3 +126,11 @@ Clippy runs with `-D warnings` over test targets too.
 - Validate extractor changes against **real transcripts** under
   `~/.claude/projects`, not only the unit tests. Every trap documented so far
   was found that way.
+- **Adding a facts field touches up to six places** — walk the list, because
+  the missable one is different every time: (1) `Summary` + the `summarize`
+  loop; (2) `summarize_spawn`, if the delegated tier should carry it too —
+  a quantity in one tier and not the other makes them silently
+  non-comparable; (3) `docs/facts-contract.md`, always; (4) the report in
+  `render.rs`; (5) the *terminal* view in `main.rs::show_session`, the third
+  presentation layer and the one that gets forgotten; (6) the corpus sweep,
+  to prove the change additive (or to measure it, if it is not).

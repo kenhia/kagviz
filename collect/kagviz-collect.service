@@ -1,0 +1,19 @@
+# kagviz nightly collection — user unit on kai (kmon pattern; install with
+# `just collect-install`). Syncs every host's transcripts into the live mirror
+# under /ai-data/kagviz-data/live, then derives facts, reports and the index.
+# Design: sprints/review/006-mvp-plus-review.md, thread 1; docs/collection.md.
+[Unit]
+Description=kagviz nightly collection (sync the fleet's transcripts, then derive)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/src/ai-agents/kagviz
+# A systemd user unit does not inherit a login shell's PATH, and the manager's
+# default omits ~/.local/bin — where rclone lives. Without this the cleo pull
+# reports "rclone is not installed" under the timer while `just collect` works.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/src/ai-agents/kagviz/.env
+ExecStart=%h/src/ai-agents/kagviz/collect/collect.sh
+TimeoutStartSec=90min

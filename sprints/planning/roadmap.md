@@ -70,24 +70,26 @@ since day one.
   don't survive the CLI's ~30-day prune, no browse surface, no detail below
   the bucket, no interaction layer — and queued the work below.
 
+- **Sprint 007 — collect the fleet, nightly.** Transcripts self-prune at
+  the source, so collection is what makes history exist. A live, accumulating
+  mirror per host under `/ai-data/kagviz-data/live/` (kai by local rsync,
+  kubs0 by rsync over ssh, cleo by rclone over sftp), never pruned and never
+  written by kagviz; `kagviz derive` computes facts + report per new or
+  changed session — by content hash, and in full when the kagviz version
+  changes — and regenerates `sessions.json` (a second contract) and
+  `index.html`; a systemd user timer on kai runs it at 04:00 Pacific; a host
+  that does not answer is recorded as unreachable on the page, not read as
+  "nothing new"; copyparty serves `derived/` on the tailnet at `/kagviz/`.
+  See `sprints/007-collect-the-fleet-nightly.md` and `docs/collection.md`.
+
 ## Now
-
-- **Sprint 007 — collect the fleet, nightly.** The priority: transcripts
-  self-prune at the source, so collection is what makes history exist.
-  A live, accumulating mirror per host under `/ai-data/kagviz-data/live/`
-  (kai, kubs0, cleo → kai's local volume), synced by tooling that runs
-  manually and from a systemd user timer at 04:00 America/Los_Angeles; a
-  derive stage that computes facts + reports for new/updated sessions and
-  regenerates a cross-host session index; the index served on the tailnet
-  (copyparty already serves exactly this kind of page). Design in review 006,
-  thread 1.
-
-## Next
 
 - **Report legibility quick wins (sprint 008).** #1590 (failure rate beside
   the count) and the #1591 interim: a zoom-in checkbox rendering dense strips
   at readable element size in a horizontal scroller — CSS `:checked` only, so
   the report stays self-contained with no JS.
+
+## Next
 
 - **The facts learn detail (sprint 009).** The contract work the app needs:
   a per-event detail tier (tool calls with name, timing, outcome) so a
@@ -112,12 +114,13 @@ since day one.
   static from the same host as the collected data, reading the session index
   → facts → events over HTTP with no backend. Timeline pan/zoom (#1591
   proper: forest, tree, leaf), click a segment for the drill-down. Queued as
-  a WI; propose once 007 and 009 have landed and the events document's shape
-  is proven.
+  a WI; propose once 009 has landed and the events document's shape is
+  proven — 007 shipped the index it reads first.
 - Cross-session views: how a project's sessions trend over time — the
   collected `live/` store is what makes this possible at all.
 - Compare two sessions side by side (the harness-eval use case).
 - Feed reports to `ai-findings` as ready-made infographics.
 - Consume `tool-results/*.txt` overflow for content-level analysis.
-- Run `--label` in the nightly derive when kvllm is up, and judge the prose
-  against a real model (sprint 004's open live-fire check).
+- Run `--label` in the nightly derive when kvllm is reliably up at 04:00
+  (the derive takes the flag; the timer does not pass it yet), and judge the
+  prose against a real model (sprint 004's open live-fire check).

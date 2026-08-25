@@ -3,6 +3,7 @@
 //! Reads Claude Code session transcripts and reports what actually happened.
 //! Every number is derived from the transcript bytes, never inferred.
 
+mod derive;
 mod discover;
 mod fmt;
 mod label;
@@ -16,7 +17,6 @@ use clap::{Args, Parser, Subcommand};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use summary::Summary;
-use transcript::{Subagent, Transcript};
 
 #[derive(Parser)]
 #[command(
@@ -64,11 +64,34 @@ enum Command {
         #[command(flatten)]
         label: LabelOpts,
     },
+    /// Derive facts, reports and the session index from the live mirrors.
+    ///
+    /// Reads `<live>/<host>/projects/` for every host, writes `<live>/derived/`.
+    /// Only sessions whose bytes or kagviz changed are re-derived.
+    Derive {
+        /// The live mirror root (default: $KAGVIZ_LIVE, else /ai-data/kagviz-data/live).
+        #[arg(long, value_name = "DIR")]
+        live: Option<PathBuf>,
+        /// Where derived artifacts go (default: <live>/derived).
+        #[arg(long, value_name = "DIR")]
+        out: Option<PathBuf>,
+        /// Re-derive every session, even ones whose bytes and kagviz are unchanged.
+        #[arg(long)]
+        force: bool,
+        #[command(flatten)]
+        label: LabelOpts,
+    },
+    /// Regenerate sessions.json and index.html from an existing derived tree.
+    Index {
+        /// The derived tree (default: $KAGVIZ_LIVE/derived, else /ai-data/kagviz-data/live/derived).
+        #[arg(value_name = "DIR")]
+        derived: Option<PathBuf>,
+    },
 }
 
 /// The opt-in headline pass. Off by default, and that is the contract: a
 /// plain `render` is a pure function of the transcript bytes.
-#[derive(Args, Debug, Default)]
+#[derive(Args, Debug, Default, Clone)]
 struct LabelOpts {
     /// Ask a model to write a headline and a label per phase over the facts.
     #[arg(long)]
@@ -113,7 +136,97 @@ fn main() -> Result<()> {
             out.as_deref(),
             &label,
         ),
+        Command::Derive {
+            live,
+            out,
+            force,
+            label,
+        } => derive_sessions(live.as_deref(), out.as_deref(), force, &label),
+        Command::Index { derived } => index_sessions(derived.as_deref()),
     }
+}
+
+/// The live mirror root: the flag, else the environment, else the homelab's
+/// data volume.
+fn live_root(flag: Option<&Path>) -> PathBuf {
+    flag.map(Path::to_path_buf)
+        .or_else(|| std::env::var_os("KAGVIZ_LIVE").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from(derive::DEFAULT_LIVE))
+}
+
+fn derive_sessions(
+    live: Option<&Path>,
+    out: Option<&Path>,
+    force: bool,
+    label: &LabelOpts,
+) -> Result<()> {
+    let live = live_root(live);
+    let out = out
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| live.join("derived"));
+    // Labels cache under derived/, never inside a mirror: the mirrors are
+    // verbatim copies of what the harness wrote and stay that way.
+    let label = LabelOpts {
+        label_cache: Some(
+            label
+                .label_cache
+                .clone()
+                .unwrap_or_else(|| out.join("labels")),
+        ),
+        ..label.clone()
+    };
+    let started = std::time::Instant::now();
+    let run = derive::derive(&live, &out, &derive::Options { force }, &mut |s| {
+        label_facts(s, &live, &label)
+    })?;
+    for (host, r) in &run.hosts {
+        println!(
+            "{host:<8} {:>5} session(s)  {:>5} derived  {:>5} unchanged{}",
+            r.sessions,
+            r.derived,
+            r.unchanged,
+            if r.failed > 0 {
+                format!("  {} FAILED", r.failed)
+            } else {
+                String::new()
+            }
+        );
+    }
+    if run.hosts.is_empty() {
+        println!(
+            "no hosts under {} (a host is a directory holding projects/)",
+            live.display()
+        );
+    }
+    println!(
+        "index    {:>5} session(s) → {}",
+        run.indexed,
+        out.join("index.html").display()
+    );
+    println!(
+        "kagviz   {}  in {:.1}s",
+        derive::VERSION,
+        started.elapsed().as_secs_f64()
+    );
+    if run.failed() > 0 {
+        bail!(
+            "{} session(s) could not be derived; see the warnings above",
+            run.failed()
+        );
+    }
+    Ok(())
+}
+
+fn index_sessions(derived: Option<&Path>) -> Result<()> {
+    let derived = derived
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| live_root(None).join("derived"));
+    let n = derive::index(&derived)?;
+    println!(
+        "index    {n:>5} session(s) → {}",
+        derived.join("index.html").display()
+    );
+    Ok(())
 }
 
 /// Attach model-written labels to the facts, if they were asked for.
@@ -168,7 +281,7 @@ fn list_sessions(root: &Path, project: Option<&str>) -> Result<()> {
         "SESSION", "PROJECT", "ACTIVE", "TOOLS", "FAIL"
     );
     for session in &sessions {
-        let (t, subagents) = read_session(session)?;
+        let (t, subagents) = transcript::read_session(session)?;
         let s = summary::summarize(Some(session), &t, &subagents);
         println!(
             "{:<38} {:<22} {:>7} {:>7} {:>6}",
@@ -183,27 +296,13 @@ fn list_sessions(root: &Path, project: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Read a session's transcript and every subagent sidecar beside it.
-///
-/// The sidecars are read here, at the edge, so `summarize` stays a pure
-/// function of bytes handed to it rather than of what happens to be on disk.
-fn read_session(session: &discover::SessionPaths) -> Result<(Transcript, Vec<Subagent>)> {
-    let t = transcript::read(&session.transcript)?;
-    let subagents = session
-        .subagents
-        .iter()
-        .map(|p| transcript::read_subagent(p))
-        .collect::<Result<Vec<_>>>()?;
-    Ok((t, subagents))
-}
-
 /// Summarize one session from its transcript on disk.
 fn load_session(root: &Path, id: &str) -> Result<Summary> {
     let session = discover::sessions(root, None)?
         .into_iter()
         .find(|s| s.id == id)
         .with_context(|| format!("no session {id} under {}", root.display()))?;
-    let (t, subagents) = read_session(&session)?;
+    let (t, subagents) = transcript::read_session(&session)?;
     Ok(summary::summarize(Some(&session), &t, &subagents))
 }
 

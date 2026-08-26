@@ -200,3 +200,42 @@ and 209 spans.
   with one frames it. A link that also pinned a scroll offset would break the
   moment the window was a different width.
 - **#1653.** Sprint 013, with the baseline regeneration it needs.
+
+## Deployed
+
+`df4856e` on kai, 2026-08-26 — the squash-merge commit, from clean `main`.
+
+- **App bundle** → `/ai-data/kagviz-data/live/derived/app/` (244 KB), staged
+  and renamed. Deployed *before* the derive, so `index.html` carries its link.
+- **Binary** rebuilt and the tree re-derived with it: 413 sessions
+  (cleo 119, kai 201, kubs0 93) in 1.3s. `META.json` reads
+  `0.1.0 (df4856e)` — the commit the nightly timer will now run.
+
+**Zero derived bytes moved.** The `sha256sum` sweep over all 1,239 files under
+`facts/`, `events/` and `reports/` is byte-identical before and after. That is
+the proof the deploy exists to produce, and here it is also the independent
+check on this sprint's central claim: the contract corrections changed what the
+text promises and **no value**. A sprint that did not touch the extractor must
+move nothing, and this one moved nothing.
+
+Verified live over copyparty, driven headless against the real tree:
+
+| check | result |
+|---|---|
+| browse page, app shell | 200, 200 |
+| browse page links the app | 1 match (the step-3 ordering trap, caught) |
+| the 2.6 MB events document | 200, 2,621,534 bytes |
+| facts on screen | 106 ms |
+| events read and decoded | 113 ms, "Events read — 2.6 MB" on the page |
+| fit view | `40m per column, from the facts — the bar counts records, 4 buckets summed` |
+| zoomed to the events tier | `10s per column, re-bucketed from the events — the bar counts turns and tool calls` |
+| click a column | `?span=107&from=270&to=280`, panel opened on the right window |
+| delegated tier | 5 spawn rows, opening `?spawn=0` |
+| page errors / failed requests | none |
+
+**Not asserted**, per the skill: that the next 04:00 run succeeds — that
+depends on hosts being reachable, which is a nightly variable, not a deploy
+property. A deploy deliberately does not sync; `just collect-status` is the
+check the morning after.
+
+Rollback target: `e7f8164`, the commit the tree was stamped with before this.

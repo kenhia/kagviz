@@ -1,0 +1,10 @@
+# Declares that this repo deploys as part of /sprint-ship (Phase 7).
+# One skill name per line; sprint-ship invokes each in order after the merge
+# and local cleanup, so what ships is built from the merged main.
+#
+# Absent file = phase skipped silently. That is how the served tree came to be
+# stamped with a sprint-009 branch commit for three sprints (found in 011):
+# nothing in the workflow rebuilt the release binary the nightly timer runs.
+#
+# See .claude/skills/deploy-kagviz/SKILL.md
+deploy-kagviz

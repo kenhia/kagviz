@@ -200,6 +200,39 @@ unit does not inherit a login shell's PATH and would otherwise report "rclone
 is not installed" under the timer while `just collect` works (kfdc found the
 same with `claude`).
 
+## Deploying
+
+**The deploy artifact is `target/release/kagviz` in this checkout.** The unit
+sets `WorkingDirectory` here and `collect.sh` runs that path directly — it does
+not build. So whatever binary is in `target/release/` at 04:00 is the extractor
+that derives the fleet, and a ship that does not rebuild leaves the collector on
+the previous sprint's code.
+
+`just collect`, `just collect-derive` and `just collect-install` all depend on
+`build-release`; the **systemd unit does not**. That asymmetry is the trap.
+
+Sprint 011 found the served tree stamped `0.1.0 (19a75d4)` — a sprint-009
+*branch* commit that squash-merge had collapsed, so it named no commit
+reachable from `main`. Three sprints, because nothing in the workflow rebuilt
+after a ship. `.sprint-deploy` now declares `deploy-kagviz`
+(`.claude/skills/deploy-kagviz/SKILL.md`), which sprint-ship runs in Phase 7,
+after the merge — so what derives the fleet is built from merged `main`.
+
+Two things that skill encodes and are easy to get wrong by hand:
+
+- **`just web-deploy` before `just collect-derive`.** `derive` regenerates
+  `index.html` last, and the browse page links the app only when
+  `app/index.html` is already on disk. Reverse them and the page ships without
+  its link.
+- **A sprint that did not change the extractor must move zero derived bytes.**
+  The stamp changes; no value does. Sweep `sha256sum` over `facts/`, `events/`
+  and `reports/` before and after — 1,221 documents today — and diff it. That
+  diff is the deploy's proof, and it is also how an unintended change to the
+  facts gets caught at the moment it ships rather than months later.
+
+Rollback is cheap because nothing here is a source of truth: the mirrors are
+never touched and never pruned, so `derived/` rebuilds from them in seconds.
+
 ## Operating
 
 ```sh

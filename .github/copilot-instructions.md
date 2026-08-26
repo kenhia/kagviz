@@ -118,8 +118,9 @@ surface for any change to a document or the page.
   unknown record type or field.
 - `src/summary.rs` — the deterministic pass.
 - `docs/collection.md` — the live mirror under `/ai-data/kagviz-data/live`,
-  the nightly `derive`, and what is served. **Read this before touching
-  `collect/` or `src/derive.rs`.**
+  the nightly `derive`, what is served, and **deploying** — the artifact is
+  `target/release/kagviz` in this checkout, because that is what the timer
+  runs. **Read this before touching `collect/` or `src/derive.rs`.**
 - `web/README.md` — the app: why the router is hash-based, why the bundle
   lives under `derived/`, and the two traps that only show up on deploy.
   **Read this before touching `web/`.**

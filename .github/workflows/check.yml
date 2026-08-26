@@ -17,7 +17,11 @@ jobs:
     name: just check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # v4 targets Node 20, which runners now warn about on every run
+      # (sprint 010). v5, v6 and v7 all declare node24 in their action.yml;
+      # v7's changes (fork-PR checkout blocked under pull_request_target /
+      # workflow_run, ESM) do not touch how this workflow uses it.
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

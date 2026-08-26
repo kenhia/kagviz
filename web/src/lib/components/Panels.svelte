@@ -27,7 +27,17 @@
 	} from '$lib/contract/derived.js';
 	import { clock, count, duration } from '$lib/format.js';
 
-	let { facts }: { facts: Facts } = $props();
+	let {
+		facts,
+		onopenspawn
+	}: {
+		facts: Facts;
+		/**
+		 * Open a spawn's own events. Absent until the events document is read —
+		 * the row must not offer a door that opens onto nothing.
+		 */
+		onopenspawn?: (i: number) => void;
+	} = $props();
 
 	const PHASE_LIST_MAX = 30;
 	const PHASE_LIST_LONGEST = 15;
@@ -275,7 +285,12 @@
 								<span class="chip agent">{spawn.subagent_type ?? 'agent'}</span>
 								{#if spawn.model}<span class="sub">{spawn.model}</span>{/if}
 							</td>
-							<td>{spawn.description ?? '—'}</td>
+							<td>
+								{spawn.description ?? '—'}
+								{#if onopenspawn}
+									<button class="open" onclick={() => onopenspawn(i)}>events</button>
+								{/if}
+							</td>
 							<td class="r"
 								>{calls}{#if failed > 0}<em>{failed} failed</em>{/if}</td
 							>
@@ -429,6 +444,22 @@
 	.chip.agent {
 		background: var(--saidbg);
 		color: var(--said);
+	}
+	button.open {
+		font: inherit;
+		font-size: 11.5px;
+		margin-left: 6px;
+		padding: 0 8px;
+		border: 1px solid var(--line);
+		border-radius: 999px;
+		background: var(--panel);
+		color: var(--muted);
+		cursor: pointer;
+		white-space: nowrap;
+	}
+	button.open:hover {
+		background: var(--hover);
+		color: var(--ink);
 	}
 	code {
 		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

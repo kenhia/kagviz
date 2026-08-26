@@ -1,21 +1,33 @@
 <!--
   The session page (`#/s/<host>/<id>`).
 
-  The static report's panels, over the same facts document the report is
-  rendered from — this page fetches `derived/facts/<host>/<id>.json` and reads
-  nothing else. The renderer reads the facts, never the transcript, and so does
-  this. The strip is drawn once and is static: pan, zoom and the click into a
-  segment are part 2.
+  The static report's panels over the same facts document the report is
+  rendered from, plus the two things the report cannot do: pan and zoom the
+  timeline, and open what is behind a piece of it.
+
+  **Two documents, fetched separately and on purpose.** The facts render the
+  whole page; the events are the detail tier and are fetched alongside them,
+  with their size on screen while they arrive — a twelve-hour session's events
+  run to megabytes where its facts are ~100 KB. Everything above the timeline
+  is drawn before they land, and the timeline itself is drawn at the facts'
+  own resolution until they do. The page is never blocked on the big file.
+
+  **The selection lives in the hash**, so a view can be pasted into korg:
+  `#/s/<host>/<id>?phase=3`, or `?span=0&from=120&to=150` for a window. It is
+  read on arrival and the timeline frames it.
 -->
 <script lang="ts">
 	import { page } from '$app/state';
 	import Panels from '$lib/components/Panels.svelte';
-	import Strip from '$lib/components/Strip.svelte';
+	import Segment from '$lib/components/Segment.svelte';
+	import Timeline from '$lib/components/Timeline.svelte';
 	import Written from '$lib/components/Written.svelte';
 	import type { Facts } from '$lib/contract/facts.js';
+	import type { EventsDocument } from '$lib/contract/events.js';
 	import { toolFailureRate, dominantPhase, totalToolFailures } from '$lib/contract/derived.js';
-	import { loadFacts, reportUrl } from '$lib/data.js';
-	import { count, duration, percent, stamp } from '$lib/format.js';
+	import { fromQuery, toQuery, type Selection } from '$lib/segment.js';
+	import { loadFacts, loadEventsProgressively, reportUrl, type Progress } from '$lib/data.js';
+	import { bytes, count, duration, percent, stamp } from '$lib/format.js';
 
 	const host = $derived(page.params.host ?? '');
 	const id = $derived(page.params.id ?? '');
@@ -24,11 +36,23 @@
 	let error = $state<string | undefined>(undefined);
 	let loading = $state(true);
 
+	let events = $state<EventsDocument | undefined>(undefined);
+	let progress = $state<Progress | undefined>(undefined);
+	let eventsSize = $state<number | undefined>(undefined);
+	let eventsError = $state<string | undefined>(undefined);
+
+	let selection = $state<Selection | undefined>(undefined);
+	let frame = $state<Selection | undefined>(undefined);
+
 	$effect(() => {
 		const [h, i] = [host, id];
 		let live = true;
 		loading = true;
 		error = undefined;
+		events = undefined;
+		eventsError = undefined;
+		eventsSize = undefined;
+		progress = { read: 0 };
 		loadFacts(h, i)
 			.then((f) => {
 				if (live) facts = f;
@@ -39,9 +63,58 @@
 			.finally(() => {
 				if (live) loading = false;
 			});
+		loadEventsProgressively(h, i, (p) => {
+			if (live) {
+				progress = p;
+				eventsSize = p.read;
+			}
+		})
+			.then((e) => {
+				if (live) events = e;
+			})
+			.catch((e) => {
+				if (live) eventsError = e instanceof Error ? e.message : String(e);
+			})
+			.finally(() => {
+				if (live) progress = undefined;
+			});
 		return () => {
 			live = false;
 		};
+	});
+
+	/**
+	 * The selection lives in the fragment, read once on arrival and written
+	 * back on every change.
+	 *
+	 * Both halves go through `location.hash` and `history.replaceState` rather
+	 * than kit's router, for the reason sprint 011 wrote down: `resolve()`
+	 * returns `base + '#' + path` where `base` is the runtime-computed
+	 * *directory*, so a resolved href points at the directory rather than the
+	 * shell inside it — which copyparty serves as a file listing. Owning the
+	 * fragment directly also means no navigation fires, so writing the
+	 * selection back cannot re-run this page and discard it. Nothing else
+	 * reads the query, so `page.url` going stale behind us costs nothing.
+	 */
+	let read = $state(false);
+	$effect(() => {
+		if (read || typeof location === 'undefined') return;
+		read = true;
+		const q = location.hash.indexOf('?');
+		const want = fromQuery(new URLSearchParams(q < 0 ? '' : location.hash.slice(q + 1)));
+		if (want) {
+			selection = want;
+			frame = want;
+		}
+	});
+
+	$effect(() => {
+		if (!read || typeof location === 'undefined') return;
+		const q = toQuery(selection).toString();
+		const cut = location.hash.indexOf('?');
+		const route = cut < 0 ? location.hash : location.hash.slice(0, cut);
+		const next = `${route}${q ? `?${q}` : ''}`;
+		if (location.hash !== next) history.replaceState(history.state, '', next);
 	});
 
 	const title = $derived(
@@ -147,18 +220,41 @@
 		<section class="card">
 			<h2>Time</h2>
 			<p class="note">
-				{duration(facts.active_secs)} of work in {facts.activity.spans.length} stretch(es),
-				{duration(facts.activity.bucket_secs)} per column. Idle gaps are collapsed to a break.
+				{duration(facts.active_secs)} of work in {facts.activity.spans.length} stretch(es). Idle gaps
+				are collapsed to a break, so the axis is time worked, not time elapsed. Band colours name the
+				phase kind — the Phases card below is the key, and every band names itself on hover.
 			</p>
-			<p class="note">
-				Band colours name the phase kind — the Phases card below is the key, and every band names
-				itself on hover.
+			<Timeline {facts} {events} bind:selection bind:frame />
+			<p class="note detail">
+				{#if eventsError}
+					<span class="warn">Could not read this session's events: {eventsError}</span> The timeline still
+					draws at the facts' own resolution; zooming past it, and opening a segment, need that document.
+				{:else if events}
+					Events read{eventsSize ? ` — ${bytes(eventsSize)}` : ''}. Click a column for the turns and
+					tool calls behind it, or a phase band for the phase.
+				{:else if progress}
+					Reading the events — {bytes(progress.read)}{progress.total
+						? ` of ${bytes(progress.total)}`
+						: ''} so far. The page does not wait for them; zooming past
+					{duration(facts.activity.bucket_secs)} per column and opening a segment do.
+				{/if}
 			</p>
-			<Strip {facts} />
 		</section>
 	{/if}
 
-	<Panels {facts} />
+	{#if selection && events}
+		<Segment {facts} {events} {selection} onclear={() => (selection = undefined)} />
+	{/if}
+
+	<Panels
+		{facts}
+		onopenspawn={events
+			? (i) => {
+					selection = { kind: 'spawn', spawn: i };
+					document.querySelector('section.seg')?.scrollIntoView({ block: 'nearest' });
+				}
+			: undefined}
+	/>
 
 	<footer>
 		Read from this session's facts document. Every figure is computed from the transcript;

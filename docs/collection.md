@@ -24,7 +24,7 @@ snapshots with a date and a commit on them — and are untouched by any of this.
         reports/<host>/<session-id>.html   # `kagviz render`
         sessions.json        # the cross-host index — a contract (facts-contract.md)
         index.html           # the page a person picks a session from
-        app/                 # the front-end (sprint 011) — `just web-deploy` puts it here
+        app/                 # the front-end (sprints 011-012) — `just web-deploy` puts it here
         state.json           # per session: source digest + the kagviz that derived it
         META.json            # the last run: kagviz version, when, per-host counts
         sync-status.json     # copied from above, so the served tree carries it
@@ -158,8 +158,15 @@ Ken already accepted for `~/src` on the same viewer (k-homelab manifest,
 
 The same path carries the front-end, and since sprint 011 it does:
 **<https://kai.encke-wahoo.ts.net:8027/kagviz/app/index.html>** is the app,
-reading `sessions.json` → facts (→ events, in part 2) over HTTP with no
-backend at all. `just web-deploy` builds `web/` and stages it into
+reading `sessions.json` → facts → events over HTTP with no backend at all.
+
+Since sprint 012 a session page also fetches that session's **events**
+document, which is the largest thing this mount serves: tens of KB typically,
+**2.6 MB** on the corpus's worst session. It is fetched alongside the facts
+rather than before them — the page renders fully without it, and the timeline
+draws at the facts' own resolution until it lands — and the app shows the bytes
+as they arrive rather than a spinner. Nothing else changes about the mount: it
+is one more static file `derive` already wrote. `just web-deploy` builds `web/` and stages it into
 `derived/app/`; the static `index.html` links it, but only once it is actually
 there — a link to a 404 would leave the reader unable to tell "not deployed"
 from "broken".

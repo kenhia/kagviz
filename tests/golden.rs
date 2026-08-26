@@ -285,12 +285,17 @@ fn the_events_add_up_to_the_facts() {
     );
     // Per phase, and per spawn.
     //
-    // Failures carry the same `<unknown>` carve-out per phase as the session
-    // does: a failure whose call is not in the file still lands in the phase
-    // its result was recorded in — a phase must not report an unknown as a
-    // zero either — and the events still have no call to hang it on. The
-    // fixture has exactly one, in its last phase.
-    let mut unplaced = 0u64;
+    // `tool_calls` is an equality per phase. Failures are **not**, and this
+    // test asserted that they were until sprint 012 measured it: the facts
+    // count a failure on the record carrying the *result*, the event carries
+    // `failed` on the *call*, so a call whose result came back after a phase
+    // boundary is counted in one phase and drawn in the next — in either
+    // direction. 17 phases of the 413-session corpus place more failures than
+    // their phase counts; the fixture has none, which is the only reason the
+    // old `placed <= counted` held (and it would have underflowed the running
+    // total, not merely failed). What is true is the signed sum: across the
+    // phases the shortfall is exactly the `<unknown>` count.
+    let mut unplaced = 0i64;
     for (i, phase) in facts["phases"].as_array().unwrap().iter().enumerate() {
         let of_phase = tools.clone().filter(|e| e["phase"] == i as u64);
         assert_eq!(
@@ -298,16 +303,11 @@ fn the_events_add_up_to_the_facts() {
             phase["tool_calls"].as_u64().unwrap(),
             "phase {i} tool_calls"
         );
-        let placed = of_phase.filter(|e| e["failed"] == true).count() as u64;
-        let counted = phase["tool_failures"].as_u64().unwrap();
-        assert!(
-            placed <= counted,
-            "phase {i} placed more failures than it counted"
-        );
-        unplaced += counted - placed;
+        let placed = of_phase.filter(|e| e["failed"] == true).count() as i64;
+        unplaced += phase["tool_failures"].as_i64().unwrap() - placed;
     }
     assert_eq!(
-        unplaced, unknown,
+        unplaced, unknown as i64,
         "every unplaced phase failure is an <unknown>"
     );
     let spawns = facts["delegation"]["spawns"].as_array().unwrap();

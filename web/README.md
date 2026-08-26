@@ -1,26 +1,72 @@
 # `web/` — the app over the facts
 
 A static single-page app that reads the same three documents kagviz emits —
-`sessions.json`, the facts, and (from sprint 012) the events — and nothing
-else. No backend: it is HTML, CSS and JS copied next to the data.
+`sessions.json`, the facts and the events — and nothing else. No backend: it is
+HTML, CSS and JS copied next to the data.
 
-Shipped in sprint 011 (part 1). The static report is unchanged and stays; this
-does not replace it.
+Sprint 011 built the skeleton, the contracts and the session browser; sprint
+012 added the timeline's pan, zoom and click. The static report is unchanged
+and stays; this does not replace it.
 
 ## Reading the code
 
-| path                        | what                                                                                                                                         |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/lib/contract/`         | the three documents in TypeScript, plus the decoders and the derived helpers. `conformance.spec.ts` is what makes it a contract — see below. |
-| `src/lib/data.ts`           | where the documents are fetched from, and what a failure says.                                                                               |
-| `src/lib/strip.ts`          | the time strip's geometry, pure so it can be tested.                                                                                         |
-| `src/lib/browse.ts`         | sorting and filtering the index, likewise.                                                                                                   |
-| `src/lib/format.ts`         | durations, counts, percentages — mirrors `src/fmt.rs` exactly.                                                                               |
-| `src/routes/+page.svelte`   | the session browser, `#/`.                                                                                                                   |
-| `src/routes/s/[host]/[id]/` | the session page, `#/s/<host>/<id>`.                                                                                                         |
-| `scripts/relativize.js`     | the post-build step that makes the shell mount-independent.                                                                                  |
+| path                        | what                                                                                                                                                     |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/lib/contract/`         | the three documents in TypeScript, plus the decoders and the derived helpers. `conformance.spec.ts` is what makes it a contract — see below.             |
+| `src/lib/data.ts`           | where the documents are fetched from, and what a failure says.                                                                                           |
+| `src/lib/timeline.ts`       | the timeline's geometry — track, resolution, columns, bands, ticks, hit-testing. Pure, so all of it is testable. Supersedes 011's `strip.ts`.            |
+| `src/lib/segment.ts`        | what a click resolves to, and the merge of the events with the facts' prompts and questions — the only place the app reads two documents for one answer. |
+| `src/lib/browse.ts`         | sorting and filtering the index, likewise.                                                                                                               |
+| `src/lib/format.ts`         | durations, counts, percentages — mirrors `src/fmt.rs` exactly.                                                                                           |
+| `src/routes/+page.svelte`   | the session browser, `#/`.                                                                                                                               |
+| `src/routes/s/[host]/[id]/` | the session page, `#/s/<host>/<id>` — and `?phase=3` / `?span=0&from=120&to=150`, the selection in the hash.                                             |
+| `scripts/relativize.js`     | the post-build step that makes the shell mount-independent.                                                                                              |
 
-## The three decisions this sprint made
+## The timeline (sprint 012)
+
+**One continuous zoom, not three levels.** The x-axis is **active seconds with
+idle collapsed** — the coordinate the strip already used, and the reason it
+reads at all — so a track is `Σ span.secs · pxPerSec + breaks · breakPx` and
+`pxPerSec` is the whole zoom control. Forest, tree and leaf are three
+neighbourhoods of one scale; the breadcrumb's buttons pick a `pxPerSec` rather
+than switching modes, and "a column is a turn" falls out of the axis at deep
+zoom instead of needing a fourth layout.
+
+A **spawn** is the third kind of selection, opened from the delegated tier's
+row rather than from the strip: phases cut the _parent's_ timeline, so a
+spawn's events carry none and it is not on the strip at all. It is reconciled
+against `delegation.spawns[k]`, and nothing from `user_involvement` is merged
+into it — that is the parent's, and a subagent has no user.
+
+**Above `bucket_secs` a column is whole facts buckets summed and the bar counts
+`records`; below it there is nothing finer in the facts, so the column is
+re-bucketed from the events and the bar counts turns and tool calls.** Those
+are not the same number — `records` includes `system` and snapshot records,
+which is why the contract says the events do not reproduce it — so the caption
+names the resolution, the document _and_ the metric on every frame. **The fit
+view is always the facts**, even once the events are here: it is the report's
+strip, it is what the page draws before the big document lands, and a panel
+that changes what its bars count the instant a fetch completes is what the
+caption exists to prevent.
+
+**A break grows with the columns, bounded by its share of the screen.** At leaf
+zoom a 3px break between wide columns stops reading as a separator, and the one
+thing a break says is that time was removed here. But letting it simply match
+the column width reproduces the defect sprint 011 shipped — 208 breaks claiming
+more than the viewport, every span squeezed to nothing. The three densities
+were a proxy for the _share of the visible width_ the breaks take;
+`breakWidth()` bounds that directly, with the densities as the floor. Read its
+comment before touching it, and the test on 2/13/61/209 spans.
+
+**Three things keep it fast on a million-pixel track.** One `<svg>` positioned
+at the scroll offset with a `viewBox` in track coordinates, so only the visible
+slice is ever in the DOM. One click handler with coordinate hit-testing, not a
+listener per rect — and nothing focusable per column, which would be worse for
+a keyboard than the `role="application"` container. And `ticks()` takes the
+window rather than generating every tick and filtering, which was two million
+objects a frame at leaf zoom.
+
+## The three decisions sprint 011 made
 
 **Hash routing.** copyparty serves files, not SPA fallbacks: a GET for
 `/kagviz/app/s/kai/<id>` is a 404, not `index.html`. Putting the route in the
@@ -99,10 +145,12 @@ VITE_KAGVIZ_DERIVED=https://kai.encke-wahoo.ts.net:8027/kagviz/ just web-dev
 
 ## What is deliberately not here
 
-- **Pan, zoom, and the click into a timeline segment.** Sprint 012 (#1591,
-  #1639). The strip is drawn once, at the session's own `bucket_secs`; finer
-  buckets come from the events document, which is why `MAX_BUCKETS` stayed at
-  240 when that document was designed.
+- **A transcript viewer.** The segment panel shows what happened — turns,
+  calls, durations, sizes, files — not what was said inside them. The events
+  document says the same where it lists what it does not carry.
+- **Zoom and pan in the hash.** Only the _selection_ is deep-linked; arriving
+  with one frames it. A link that pinned a scroll offset would break the moment
+  the window was a different width.
 - **A combined active time.** A subagent runs while the session waits on it, so
   those seconds overlap rather than add. `contract/derived.ts` has a test
   asserting no such helper exists.

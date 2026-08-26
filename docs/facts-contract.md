@@ -496,13 +496,27 @@ consumer can lean on, and that the tests hold:
   `lines_deleted` summed over the events are `changes.lines_added` and
   `lines_deleted`; the distinct `files` are `changes.files_touched`.
 - For every phase `i`, the events with `phase: i` add up to that phase's
-  `tool_calls` and `output_tokens`, and to its `tool_failures` **less the
-  `<unknown>` ones** — the same carve-out as the line above, for the same
-  reason. A failure whose call is not in the file still lands in the phase
-  its result was recorded in, because a phase must not report an unknown as
-  a zero; the events still have no call to hang it on. The fixture has one,
-  and it is why this rule is stated per phase rather than left implied.
+  `tool_calls` and `output_tokens` **exactly**. Measured over 413 transcripts:
+  no phase of any session disagrees on either.
+- **Failures do not add up per phase, and a consumer must not assert that they
+  do.** The facts count a `tool_failures` on the record that carried the
+  *result*; an event carries `failed` on the *call*, stamped with the call's
+  own `at`. A call whose result came back after a phase boundary is therefore
+  counted in one phase and drawn in the neighbouring one — in **either**
+  direction, so a phase can place more failures than it counts. Summed across
+  the phases the shortfall is exactly the `<unknown>` count, the same carve-out
+  the session-level line has. Measured over 413 transcripts: 17 phases place
+  more failures than their phase counts, and no session's total shortfall
+  differs from `<unknown>`. The same reading applies to
+  `activity…buckets[].tool_failures`, cut on the same timestamps.
 - The same for each `spawns[k]` against `delegation.spawns[k]`.
+
+This one was written the other way until sprint 012, when the app needed to
+put both tiers on screen beside each other and the claim had to be true. It
+was asserted in three places — this document, `tests/golden.rs` and the app's
+`conformance.spec.ts` — and held in all three only because the fixture has no
+straddling call. Corrected here and in both tests; **no value moved**, and no
+document kagviz emits changed a byte. What changed is what the text promises.
 
 ```json
 { "session_id": "63a9b83b-…",

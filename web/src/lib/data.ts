@@ -73,6 +73,74 @@ export function loadEvents(host: string, id: string): Promise<EventsDocument> {
 	return load(`events/${encodeURIComponent(host)}/${encodeURIComponent(id)}.json`, decodeEvents);
 }
 
+export interface Progress {
+	/** Bytes read so far. */
+	read: number;
+	/** `Content-Length`, when the server sent one — absent, never guessed. */
+	total?: number;
+}
+
+/**
+ * The events document, read with its size visible.
+ *
+ * The facts are ~100 KB; a twelve-hour session's events run to megabytes (2.6
+ * MB on the corpus's worst). A panel that sits blank for that long reads as
+ * broken, so `#1639` asks for the size and the progress rather than a
+ * spinner — and a server that sends no `Content-Length` leaves `total`
+ * absent instead of being given an invented one to divide by.
+ */
+export async function loadEventsProgressively(
+	host: string,
+	id: string,
+	onProgress: (p: Progress) => void
+): Promise<EventsDocument> {
+	const path = `events/${encodeURIComponent(host)}/${encodeURIComponent(id)}.json`;
+	const target = url(path);
+	let res: Response;
+	try {
+		res = await fetch(target);
+	} catch (e) {
+		throw new Error(`could not reach ${path}: ${e instanceof Error ? e.message : String(e)}`, {
+			cause: e
+		});
+	}
+	if (!res.ok) throw new Error(`${path} — ${res.status} ${res.statusText}`);
+
+	const len = Number(res.headers.get('content-length'));
+	const total = Number.isFinite(len) && len > 0 ? len : undefined;
+	let text: string;
+	if (!res.body) {
+		text = await res.text();
+		onProgress({ read: text.length, total });
+	} else {
+		const reader = res.body.getReader();
+		const decoder = new TextDecoder();
+		const parts: string[] = [];
+		let read = 0;
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			read += value.byteLength;
+			parts.push(decoder.decode(value, { stream: true }));
+			onProgress({ read, total });
+		}
+		parts.push(decoder.decode());
+		text = parts.join('');
+	}
+	try {
+		return decodeEvents(parse(text, path), path);
+	} catch (e) {
+		if (e instanceof ContractError) {
+			throw new Error(
+				`${path} is not a document this app understands (${e.message}). ` +
+					`The app and the kagviz that derived this tree have drifted — see docs/facts-contract.md.`,
+				{ cause: e }
+			);
+		}
+		throw e;
+	}
+}
+
 /**
  * The sync status, or `undefined` when the tree carries none.
  *

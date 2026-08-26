@@ -4,9 +4,9 @@
  *
  * The detail tier under the facts: every assistant turn and every tool call,
  * in time order, each stamped with the phase that holds it. A third contract
- * under the same rules. Nothing in this sprint reads it — the timeline's click
- * and re-bucketing are part 2 — but it is typed and held to the invariants
- * here, so the day the app reaches for it the shape is already proven.
+ * under the same rules. Typed in sprint 011 before anything read it; sprint
+ * 012 is what reads it — `timeline.ts` re-buckets these past the strip's
+ * resolution, and `segment.ts` is what a click into one resolves to.
  *
  * The invariants a consumer can lean on (`conformance.spec.ts` asserts every
  * one of them over the repo's goldens):
@@ -19,7 +19,12 @@
  *   to `changes.lines_added`/`lines_deleted`; distinct `files` are
  *   `changes.files_touched`.
  * - For every phase `i`, the events with `phase: i` add up to that phase's
- *   `tool_calls`, `tool_failures` and `output_tokens`. Same per spawn.
+ *   `tool_calls` and `output_tokens` exactly. **Not `tool_failures`**: the
+ *   facts count a failure on the record carrying the result and an event
+ *   carries `failed` on the call, so a call whose result crossed the boundary
+ *   is counted in one phase and drawn in the next — either way round. Only
+ *   the sum across the phases is fixed, and it falls short by `<unknown>`.
+ *   Same per spawn.
  */
 
 import {

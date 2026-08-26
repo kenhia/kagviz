@@ -112,26 +112,41 @@ since day one.
 
 ## Now
 
-- Nothing in flight. The natural next is the front-end (below), now that
-  009 has landed the document it reads last.
+Queued in korg, in this order (2026-08-26). Front-end v1 (#1619) is split in
+two because its halves carry different risks — part 1 is plumbing, part 2 is
+the interaction — and part 1 is useful on its own the day it ships.
+
+- **Sprint 011 — front-end v1, part 1: the skeleton, the contracts in
+  TypeScript, the session browser** (korg:1641; #1636, #1637, #1638). A
+  SvelteKit + Svelte 5 + TypeScript static SPA in `web/` — the homelab
+  convention — hash-routed because copyparty serves files and not SPA
+  fallbacks, served from `derived/app/` on the data's own origin, and gated
+  inside `just check` and CI. The three contracts typed, with a conformance
+  test over the repo's goldens, so the app is the contract's second consumer
+  *in the gate*. The session browser (sortable, filterable, sync status) and
+  a session page carrying the report's panels and a static strip. Deployed.
+  No interaction yet.
+- **Sprint 012 — front-end v1, part 2: the timeline — forest, tree, leaf**
+  (korg:1642; #1591, #1639). Pan and zoom from the whole session down to a
+  span, a phase, a turn — re-bucketed from the events document past the
+  strip's resolution, which is why `MAX_BUCKETS` stayed at 240 — and click
+  any segment for the turns and tool calls behind it, prompts and questions
+  merged in, failures and opaque calls marked. Closes #1619 and #1591.
 
 ## Next
 
-- **Reconcile shell edits, honestly or not at all.** The `opaque_edits` gap is
-  the one remaining undercount, and the hard one: nothing in the transcript
-  bytes can see a `sed -i`. Two separable pieces — narrow `opaque_edits` to
-  shell calls that plausibly wrote (deterministic, from the command string),
-  and a `git diff` figure that would have to be a separately named, clearly
-  *inferred* field.
+- **`opaque_edits` counts what could have written** (korg:1643; #1640).
+  Measured 2026-08-26 over the corpus: of 21,805 shell calls — every one an
+  `opaque_edit` today — 9,828 carry no write-shaped token at all, and a
+  further 3,771 are only git plumbing or build tools. An allowlist over the
+  command string (conservative: anything unparsed stays opaque), landed as a
+  measured breaking change with the before/after, and carried on the events
+  document by the same accumulator. The other half of the old entry here — an
+  inferred `git diff` figure — stays rejected on sprint 003's grounds and is
+  not queued.
 
 ## Later / Ideas
 
-- **Interactive front-end v1** — the app itself: a TS SPA in `web/`, served
-  static from the same host as the collected data, reading the session index
-  → facts → events over HTTP with no backend. Timeline pan/zoom (#1591
-  proper: forest, tree, leaf), click a segment for the drill-down. Queued as
-  a WI (#1619); 007 shipped the index it reads first and 009 the events
-  document it reads last, so it can be proposed now.
 - Cross-session views: how a project's sessions trend over time — the
   collected `live/` store is what makes this possible at all.
 - Compare two sessions side by side (the harness-eval use case).

@@ -55,7 +55,7 @@ and never rejects an unknown `type`.
 | `isSidechain` | Older format's subagent marker. Newer versions write `subagents/` files instead and leave this `false`. |
 | `isMeta` | `true` on `user` records the **harness** wrote, not the user — most visibly the body of an invoked skill. Written as an explicit `false` about as often as it is omitted, so read it as "flagged or not", never as present/absent. `is_user_turn` excludes it. See trap 5. |
 
-## Five traps
+## Six traps
 
 ### 1. `promptId` does not mark a prompt
 
@@ -235,6 +235,44 @@ after the first may be indented by the emitting command, and `<command-args>`
 is sometimes empty (`/clear`) and sometimes absent (`/exit`), which mean the
 same thing. `Base directory for this skill:` needs nothing done to it: it is
 derivable from the skill name, and the facts already carry a `skills` list.
+
+### 6. One assistant message is written as several records, all with the same usage
+
+**Not yet fixed — every token figure kagviz reports is inflated. See #1653.**
+
+The harness writes one assistant API message as **one record per content
+block** — `thinking`, `text`, `tool_use` — and stamps every one of them with
+the same `message.id` and the *same* `message.usage`:
+
+```
+2026-06-16T19:12:08.505Z  assistant  msg_013aTUq198  [thinking]   output_tokens 3088
+2026-06-16T19:12:10.849Z  assistant  msg_013aTUq198  [text]       output_tokens 3088
+2026-06-16T19:12:10.982Z  assistant  msg_013aTUq198  [tool_use]   output_tokens 3088
+```
+
+That is 3,088 output tokens, written down three times. `summary.rs` counts per
+record, so it reads 9,264.
+
+Measured over the live mirror's 408 sessions with assistant records:
+
+| quantity | as counted (per record) | actual (per message) | error |
+|---|---|---|---|
+| `assistant_turns` | 82,416 | 39,343 | **+109.5%** |
+| `tokens.output` | 87,992,219 | 33,570,698 | **+162.1%** |
+
+403 of 408 sessions (98%) are affected. Half of all messages are a single
+record; the rest run to 35.
+
+The correction needs no judgement: the usage block is **byte-identical across
+every record of a message** — 10,604 multi-record messages checked, none
+differ — so dedup on `message.id` and take any of them. A record with no
+`message.id` counts on its own.
+
+The same family as traps 1 and 5: a field that looks per-turn and is really
+per-record. It was found in sprint 012 by reading the app's segment panel
+against the transcript behind it — three rows saying `3,088 out` for one
+message — and not by any test, because **both** the facts and the events count
+it the same wrong way, so every cross-check between them agreed.
 
 ## Line endings
 

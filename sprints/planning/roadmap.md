@@ -128,30 +128,61 @@ since day one.
   CI — the app is now the contract's second consumer *in the gate*, and on its
   first run it found the events document's per-phase invariant stating one
   fewer carve-out than it needed (`<unknown>` failures land in a phase and
-  cannot be placed in the events; both consumers now assert the corrected
-  rule). `just check` grew a `web-check` half and CI grew Node. The static
+  cannot be placed in the events). Sprint 012 found the rest of that story: the
+  per-phase failure rule was never true at all, in either direction. `just check` grew a `web-check` half and CI grew Node. The static
   report is unchanged. No interaction yet. See
   `sprints/011-front-end-v1-skeleton.md`.
 
+- **Sprint 012 — front-end v1, part 2: the timeline — forest, tree, leaf.**
+  Pan and zoom, and the click into a segment. Built as **one continuous zoom**
+  rather than the three levels the proposal described: the axis is active
+  seconds with idle collapsed, so `pxPerSec` is the whole control and forest,
+  tree and leaf are neighbourhoods of one scale. Above `bucket_secs` a column
+  is whole facts buckets and the bar counts `records`; below it the column is
+  re-bucketed from the events and counts turns and tool calls, and the caption
+  names which is on screen — the fit view is always the facts. 2.6 MB of
+  events read in 1.0s on the corpus's hardest session, a 1,023,489px track
+  with 227 rects in the DOM. Closes #1619 and #1591.
+
+  Two claims turned out to be wrong, and neither was code. The contract's
+  **per-phase failure invariant is false** — the facts count a failure where
+  its result came back, an event carries `failed` on the call, so a call whose
+  result crossed the boundary lands on one side and is drawn on the other (17
+  phases of 413 sessions; `tests/golden.rs` would have underflowed a `u64`).
+  Corrected in the document and both tests; no value moved. And **one
+  assistant message is written as several records carrying the same usage**, so
+  `tokens.output` overcounts by **162%** and `assistant_turns` by **109%** on
+  98% of sessions — filed as #1653, bundled into 013, and written up as trap 6
+  in `docs/transcript-format.md`. Found by reading the new panel against the
+  transcript behind it; no test could see it, because both documents count the
+  same wrong way. See `sprints/012-timeline-forest-tree-leaf.md`.
+
 ## Now
 
-Queued in korg (2026-08-26). Front-end v1 (#1619) was split in two because its
-halves carry different risks — part 1 was plumbing, part 2 is the interaction —
-and part 1 shipped useful on its own. Part 2 starts from a deployed app with
-typed data and a conformance test already in the gate.
+Front-end v1 (#1619) is done: it was split in two because its halves carried
+different risks — part 1 was plumbing, part 2 the interaction — and part 1
+shipped useful on its own, which is what let part 2 be about the interaction and
+nothing else.
 
-- **Sprint 012 — front-end v1, part 2: the timeline — forest, tree, leaf**
-  (korg:1642; #1591, #1639). Pan and zoom from the whole session down to a
-  span, a phase, a turn — re-bucketed from the events document past the
-  strip's resolution, which is why `MAX_BUCKETS` stayed at 240 — and click
-  any segment for the turns and tool calls behind it, prompts and questions
-  merged in, failures and opaque calls marked. Closes #1619 and #1591.
+What is queued next is the facts catching up. Sprint 012 found #1653 while
+looking at its own panel, and it is the largest correction in the queue.
 
 ## Next
 
-- **Sprint 013 — two facts corrections, one baseline regeneration**
-  (korg:1643; #1640, #1647). Two measured breaking changes bundled so the
-  corpus baseline is regenerated once rather than twice.
+- **Sprint 013 — three facts corrections, one baseline regeneration**
+  (korg:1643; #1640, #1647, #1653). Three measured breaking changes bundled so
+  the corpus baseline is regenerated once rather than three times.
+
+  **#1653 is the largest and was found in sprint 012.** One assistant API
+  message is written as one record per content block — `thinking`, `text`,
+  `tool_use` — each carrying the same `message.id` and the same
+  `message.usage`, and `summary.rs` counts per record. Over 408 sessions:
+  `tokens.output` 87,992,219 → **33,570,698** (+162% as counted),
+  `assistant_turns` 82,416 → **39,343** (+109%), 403 sessions affected. The
+  usage block is byte-identical across every record of a message (10,604
+  checked, none differ), so the fix is to dedup on `message.id`. It moves
+  `tokens`, `assistant_turns`, `models`, the phase and bucket `output_tokens`,
+  the delegated tier and the events' `turn` events.
 
   `opaque_edits` narrows to calls that *could* have written: of 21,805 shell
   calls — every one an `opaque_edit` today — 9,828 carry no write-shaped token

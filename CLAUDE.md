@@ -113,7 +113,11 @@ surface for any change to a document or the page.
 - `docs/facts-contract.md` — the JSON `show --json` emits, and the rules for
   changing it — plus the two documents under the same rules, `sessions.json`
   and the events document (`show --events`). **Read this before adding or
-  renaming a field.**
+  renaming a field** — and note what the events do *not* promise: per phase,
+  `tool_calls` and `output_tokens` add up, `tool_failures` does not. The facts
+  count a failure where its result came back and an event carries `failed` on
+  the call, so a call whose result crossed the boundary lands on one side and
+  is drawn on the other. Corrected in 012 after three places asserted it.
 - `src/transcript.rs` — tolerant record model. Parsing must never reject an
   unknown record type or field.
 - `src/summary.rs` — the deterministic pass.
@@ -128,10 +132,13 @@ surface for any change to a document or the page.
 
 ### Conventions that are easy to get wrong
 
-- **`promptId` does not mark a user prompt.** It groups every record in a turn,
-  tool results and harness-injected text included. Use `is_user_turn`. This one
-  has now been got wrong three times, so read `docs/transcript-format.md` traps
-  1 and 5 before touching it — not `INJECTED_PREFIXES` alone, which is only the
+- **A record is not a turn, and `promptId` does not mark a user prompt.** Two
+  traps of one family: fields that look per-turn and are really per-record.
+  `promptId` groups every record in a turn, tool results and harness-injected
+  text included — use `is_user_turn`. And one assistant *message* is written as
+  several records, all carrying the same `message.usage`, which is why
+  `tokens.output` is inflated 162% today (trap 6, #1653). Read
+  `docs/transcript-format.md` traps 1, 5 and 6 before touching it — not `INJECTED_PREFIXES` alone, which is only the
   narrow half. The load-bearing half is **`isMeta`**: the harness flags what it
   wrote, and that beats matching the shape of it. `<command-*>` is emphatically
   **not** on the prefix list — it is structure, and `command_line` reads the
@@ -152,7 +159,10 @@ surface for any change to a document or the page.
   follows (written text marked, unknowns visibly absent, no quantity the
   contract does not let a consumer recompute) has to hold there too, and where
   the report already solved a display problem — the strip's break densities are
-  the worked example — port the solution rather than rediscovering it.
+  the worked example — port the solution rather than rediscovering it. Sprint
+  012 is the cautionary half of that: porting the densities was right, and
+  *improving* on them without first re-deriving what they were a proxy for
+  reproduced the exact defect they had been introduced to fix.
 - **Nothing writes into `live/<host>/projects/`.** The mirrors are verbatim;
   everything computed goes under `derived/`, stamped with the kagviz that made
   it, and is regenerable. A sync never propagates a deletion.
@@ -176,7 +186,9 @@ surface for any change to a document or the page.
   `main.rs::show_session`, the third presentation layer and the one that
   gets forgotten; (6) the goldens under `tests/golden/`, regenerated and
   read; (7) `web/src/lib/contract/` — the type, the decoder, and the panel
-  that shows it, since sprint 011 (the conformance test will not fail for a
-  field the app merely ignores, which is exactly right and is also why this
-  one is easy to skip); (8) the corpus sweep, to prove the change additive
+  that shows it, since sprint 011 — and `Segment.svelte` too, since 012, if a
+  consumer would compare the field against the events (the conformance test
+  will not fail for a field the app merely ignores, which is exactly right and
+  is also why this one is easy to skip); (8) the corpus sweep, to prove the
+  change additive
   (or to measure it, if it is not).

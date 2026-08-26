@@ -143,19 +143,23 @@ describe('the events document', () => {
 		expect(files.size).toBe(facts.changes.files_touched);
 	});
 
-	it('adds up per phase, with the same <unknown> carve-out the session has', () => {
-		// A failure whose call is not in the file still lands in the phase its
-		// result was recorded in — a phase must not report an unknown as a
-		// zero either — and the events still have no call to hang it on. So
-		// what the events place per phase falls short by exactly the
-		// `<unknown>` count, and never by anything else.
+	/**
+	 * Calls and tokens are an equality per phase; failures are **not**, and
+	 * this test asserted that they were until sprint 012 measured it. The
+	 * facts count a failure on the record carrying the *result*, an event
+	 * carries `failed` on the *call*: a call whose result came back after the
+	 * phase boundary is counted in one phase and drawn in the next, in either
+	 * direction. 17 phases of the 413-session corpus place more failures than
+	 * their phase counts. The fixture has none, which is the only reason the
+	 * old `placed <= phase.tool_failures` held here and in `tests/golden.rs`.
+	 * What is true is the signed sum across the phases.
+	 */
+	it('adds up per phase — exactly for calls and tokens, in sum for failures', () => {
 		let unplaced = 0;
 		for (const [i, phase] of facts.phases.entries()) {
 			const inPhase = tools.filter((t) => t.phase === i);
 			expect(inPhase.length).toBe(phase.tool_calls);
-			const placed = inPhase.filter((t) => t.failed).length;
-			expect(placed).toBeLessThanOrEqual(phase.tool_failures);
-			unplaced += phase.tool_failures - placed;
+			unplaced += phase.tool_failures - inPhase.filter((t) => t.failed).length;
 			const output = turns
 				.filter((t) => t.phase === i)
 				.reduce((n, t) => n + (t.tokens?.output ?? 0), 0);

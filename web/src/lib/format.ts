@@ -73,3 +73,24 @@ function parseAt(iso: string | undefined): Date | undefined {
 function pad(n: number): string {
 	return n < 10 ? `0${n}` : `${n}`;
 }
+
+/**
+ * `4.4 KB`, `2.6 MB` — sizes, in the app only.
+ *
+ * There is no `fmt.rs` counterpart because the static report renders no byte
+ * size: the events document is not on it. This is here rather than beside the
+ * panel so the two places that show a size — a tool result, and the events
+ * document while it loads — cannot render one differently from the other.
+ * Decimal units, because that is what a `Content-Length` is counted in.
+ */
+export function bytes(n: number): string {
+	if (n < 1000) return `${Math.trunc(n)} B`;
+	const units = ['KB', 'MB', 'GB'];
+	let v = n / 1000;
+	let i = 0;
+	while (v >= 1000 && i < units.length - 1) {
+		v /= 1000;
+		i++;
+	}
+	return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+}

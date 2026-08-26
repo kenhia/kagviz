@@ -43,6 +43,13 @@ pub const DEFAULT_LIVE: &str = "/ai-data/kagviz-data/live";
 /// served tree carries it and the index can say which hosts were reached.
 pub const SYNC_STATUS: &str = "sync-status.json";
 
+/// Where `just web-deploy` puts the app, relative to the derived root — the
+/// same origin as the data, so the app fetches `../sessions.json` with no CORS
+/// and no k-homelab manifest change. `derive` and `index` never write here;
+/// the bundle is kagviz-produced and regenerable like everything else under
+/// `derived/`, but it is produced by the *build*, not by a run.
+pub const APP_ENTRY: &str = "app/index.html";
+
 /// What `state.json` records per `<host>/<session-id>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Derived {
@@ -422,9 +429,14 @@ pub fn index(out: &Path) -> Result<usize> {
     let sync = read_sync(&out.join(SYNC_STATUS));
     let doc = Sessions { sessions: entries };
     write_json(&out.join("sessions.json"), &doc)?;
+    // Link the app only when it is actually there. A page that offers a
+    // link to a 404 is worse than one that does not mention the app: the
+    // reader cannot tell "not deployed" from "broken", which is the same
+    // failure the sync line exists to prevent one paragraph up.
+    let app = out.join(APP_ENTRY).is_file();
     write_atomic(
         &out.join("index.html"),
-        index_html(&doc.sessions, sync.as_ref()).as_bytes(),
+        index_html(&doc.sessions, sync.as_ref(), app).as_bytes(),
     )?;
     Ok(doc.sessions.len())
 }
@@ -494,7 +506,7 @@ pub fn entry(host: &str, id: &str, s: &Summary, d: Option<&Derived>) -> SessionE
 
 /// The browse page. Self-contained like the report — no scripts, no fetches —
 /// and every figure on it is copied from `sessions.json`.
-pub fn index_html(sessions: &[SessionEntry], sync: Option<&SyncStatus>) -> String {
+pub fn index_html(sessions: &[SessionEntry], sync: Option<&SyncStatus>, app: bool) -> String {
     use render::esc;
     let mut h = String::with_capacity(64 * 1024 + sessions.len() * 700);
     h.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n");
@@ -518,6 +530,12 @@ pub fn index_html(sessions: &[SessionEntry], sync: Option<&SyncStatus>) -> Strin
         .collect();
     h.push_str(&chips.join(" "));
     h.push_str("</p>\n");
+    if app {
+        h.push_str(&format!(
+            "<p class=\"meta\"><a class=\"app\" href=\"{APP_ENTRY}\">Open the app</a> \
+             — the same sessions, sortable and filterable, with a page per session.</p>\n"
+        ));
+    }
     sync_line(&mut h, sync);
     h.push_str("</header>\n");
 
@@ -697,6 +715,7 @@ header{border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:16p
 .meta{margin:0 0 8px;color:var(--muted)}
 .chip{display:inline-block;background:var(--chip);border-radius:999px;padding:1px 9px;
   font-size:12px;color:var(--ink)}
+a.app{font-weight:600}
 .sync{margin:0;font-size:13px;color:var(--muted)}
 .sync .k{font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-right:4px}
 .sync .host{padding:1px 8px;border-radius:999px;background:var(--chip);color:var(--ink)}
@@ -954,6 +973,32 @@ mod tests {
             doc.sessions[0].headline.as_deref(),
             Some("Read one file and stopped.")
         );
+    }
+
+    /// The app is linked when it is there and not mentioned when it is not.
+    ///
+    /// A link to a 404 would leave the reader unable to tell "not deployed"
+    /// from "broken" — the same distinction the sync line above it exists to
+    /// keep visible.
+    #[test]
+    fn the_index_links_the_app_only_once_it_is_deployed() {
+        let live = scratch("applink");
+        mirror(&live, "kai", "a", &[PROMPT, TOOL]);
+        let out = live.join("derived");
+
+        derive(&live, &out, &Options { force: false }, &mut no_labels).unwrap();
+        let before = fs::read_to_string(out.join("index.html")).unwrap();
+        assert!(
+            !before.contains(APP_ENTRY),
+            "linked an app that is not there"
+        );
+
+        fs::create_dir_all(out.join("app")).unwrap();
+        fs::write(out.join(APP_ENTRY), "<!doctype html>").unwrap();
+        index(&out).unwrap();
+        let after = fs::read_to_string(out.join("index.html")).unwrap();
+        assert!(after.contains(&format!("href=\"{APP_ENTRY}\"")), "{after}");
+        assert!(after.contains("Open the app"));
     }
 
     /// Same bar as the report: nothing on the page can fetch anything.

@@ -1,7 +1,11 @@
 # The gate, run somewhere other than whoever remembers.
 #
 # `just check` is the whole job — fmt, clippy over every target with warnings
-# denied, and the tests, the golden render over the in-repo fixture included.
+# denied, the tests with the golden render over the in-repo fixture, and since
+# sprint 011 the app's own gates: lint, svelte-check, build, and the contract
+# conformance test over `tests/golden/`. A gate that skips the app is a gate
+# that lies, and the conformance test is what makes a facts change that breaks
+# the front-end fail here rather than the next time someone opens the page.
 # The corpus sweeps against /ai-data stay where they are; what this proves is
 # what a clone can prove.
 name: check
@@ -29,4 +33,14 @@ jobs:
       # `extractor/setup-just` was the first pin here and does not exist
       # (the workflow's first run failed to resolve it, 2026-08-25).
       - uses: taiki-e/install-action@just
+      # v4 is node20 (the sprint-010 notice again). v5, v6 and v7 all declare
+      # node24; v6's break (automatic caching limited to npm) and v7's (ESM,
+      # new cache outputs) do not touch how this uses it — verified through
+      # the API at the pinned refs, per sprint 010's method.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: just web-install
       - run: just check

@@ -20,7 +20,9 @@ them, `kagviz render` writes a self-contained HTML report, the session is cut
 into labelled phases, and an opt-in `--label` pass lets a model write the
 headline over facts already counted. On the homelab, a nightly collector
 mirrors every host's transcripts before the CLI prunes them and derives a
-cross-host session index from the mirror. See `sprints/planning/roadmap.md`.
+cross-host session index from the mirror, and a static app over that index —
+sortable, filterable, a page per session — is served from the same tree. See
+`sprints/planning/roadmap.md`.
 
 ```console
 $ kagviz sessions
@@ -44,8 +46,10 @@ combined  133 tool call(s), 4 failed, 406,894 out  (session + delegated)
 ```
 
 `kagviz show <id> --json` emits the whole facts document. That JSON is the
-contract: renderers consume it, and it is the seam a future interactive
-front-end plugs into. `kagviz show <id> --events` emits the detail tier under
+contract: renderers consume it, and it is the seam the front-end plugs into —
+typed in `web/src/lib/contract/` and held to the goldens by a conformance test
+that runs inside `just check`, so a facts change that breaks the app fails the
+Rust build the day it lands. `kagviz show <id> --events` emits the detail tier under
 it — every turn and tool call, joined to its phase, with sizes, outcomes and
 the files each call changed — as a separate document, so the facts stay light
 and a click on the timeline has something to read.
@@ -220,6 +224,24 @@ is copyparty's directory listing).
 operating notes. `sessions.json` is a contract like the facts —
 `docs/facts-contract.md` documents it.
 
+## The app
+
+`web/` is a static single-page app over the same three documents: the index,
+the facts, and (in part 2) the events. No backend — it is HTML, CSS and JS
+copied next to the data on copyparty, at
+`/kagviz/app/index.html`. It carries the report's panels plus what a static
+page cannot: sorting, filtering, and a page per session reachable by URL.
+
+```sh
+just web-check     # lint, svelte-check, build, vitest — what CI runs
+just web-dev       # the dev server
+just web-deploy    # build and install at derived/app/ on the served tree
+```
+
+The static report is unchanged and stays. `web/README.md` has the decisions —
+why the router is hash-based, why the bundle lives under `derived/`, and the
+two traps that only showed up on deploy.
+
 ## Where it fits
 
 - **harness-eval** scrapes session metrics ad hoc for its run logs; kagviz aims
@@ -232,10 +254,15 @@ operating notes. `sessions.json` is a contract like the facts —
 Built on the [kprojects](https://github.com/kenhia/kprojects) minimal harness.
 
 ```sh
-just          # list recipes
-just check    # fmt + clippy + tests (the CI gate)
-just fmt      # apply formatting
+just              # list recipes
+just check        # the CI gate: Rust (fmt + clippy + tests) and the app
+just rust-check   # the Rust half alone
+just web-check    # the app's half alone
+just fmt          # apply formatting, both halves
 ```
+
+A gate that skips the app is a gate that lies, so `just check` runs both. The
+app's half needs Node; it installs from `web/package-lock.json` on first run.
 
 ## License
 

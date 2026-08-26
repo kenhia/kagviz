@@ -52,5 +52,12 @@ example that skill (`agent-skills`, `gha-runtime-bump`) generalises.
 ## Verified
 
 - `just check` green locally (no Rust changed; the gate is the rule).
-- PR CI run green and the deprecation notice absent from its log — see the
-  Deployed-style note below, appended after the run.
+- PR #10's CI run (`32926897570`) green in 21s, and its log carries **zero**
+  `Node.js 20 is deprecated` notices and no other runner warnings — checked
+  by reading the log, which is the only proof that counts. Sprint 009's
+  runs carried one on every job.
+
+## Follow-up
+
+The skill that generalises this: `agent-skills` korg:1633, with a handoff
+carrying the method and this sprint as its worked example.

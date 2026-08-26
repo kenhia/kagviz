@@ -149,15 +149,36 @@ typed data and a conformance test already in the gate.
 
 ## Next
 
-- **`opaque_edits` counts what could have written** (korg:1643; #1640).
-  Measured 2026-08-26 over the corpus: of 21,805 shell calls — every one an
-  `opaque_edit` today — 9,828 carry no write-shaped token at all, and a
-  further 3,771 are only git plumbing or build tools. An allowlist over the
-  command string (conservative: anything unparsed stays opaque), landed as a
-  measured breaking change with the before/after, and carried on the events
-  document by the same accumulator. The other half of the old entry here — an
-  inferred `git diff` figure — stays rejected on sprint 003's grounds and is
-  not queued.
+- **Sprint 013 — two facts corrections, one baseline regeneration**
+  (korg:1643; #1640, #1647). Two measured breaking changes bundled so the
+  corpus baseline is regenerated once rather than twice.
+
+  `opaque_edits` narrows to calls that *could* have written: of 21,805 shell
+  calls — every one an `opaque_edit` today — 9,828 carry no write-shaped token
+  at all, and a further 3,771 are only git plumbing or build tools. An
+  allowlist over the command string, conservative in the project's direction:
+  anything unparsed stays opaque.
+
+  And `<task-notification>` records stop being counted as user prompts. Found
+  2026-08-26 while auditing what a demo would put on a shared screen: the
+  harness writes them as `type: user` with **no `isMeta` flag**, so 117 of
+  1,843 prompt previews across 48 of 413 sessions are harness XML sitting
+  where the user's own words belong. A fourth member of the `promptId`/`isMeta`
+  trap family and the first the load-bearing half does not catch — the
+  discriminator is `origin.kind`, not `promptSource`, which reads `"sdk"` for
+  both. It moves `user_prompts`, `phases`, `user_involvement` and
+  `activity…buckets[].user_turns`: the same four fields sprint 005 moved.
+
+  The other half of the old entry here — an inferred `git diff` figure — stays
+  rejected on sprint 003's grounds and is not queued.
+
+- **Sprint 014 — `just demo`** (korg:1649; #1648). One recipe to show kagviz to
+  someone who is not on the tailnet: a curated session tree, the app deployed
+  into it, an audit of what it would put on a shared screen, served over plain
+  LAN HTTP. copyparty binds loopback only — the tailnet-IP listeners on its
+  port are `tailscaled` — so there is no LAN path today, and the live tree's
+  413 sessions of prompt previews are the real exposure, which is a curation
+  problem rather than a hosting one. Packaging only.
 
 ## Later / Ideas
 

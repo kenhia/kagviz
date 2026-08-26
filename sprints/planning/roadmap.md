@@ -96,17 +96,24 @@ since day one.
   labels are. The real pan/zoom (#1591) still waits for the front-end. See
   `sprints/008-report-legibility-quick-wins.md`.
 
+- **Sprint 009 — the facts learn detail, and the contract gets honest.** The
+  events document: `kagviz show <id> --events` (and `derived/events/`, linked
+  from every `sessions.json` row) carries every turn and tool call with
+  sizes, outcome, the files each call changed and the phase that holds it —
+  a separate document under the same contract rules, built in the same pass
+  as the facts so the two cannot disagree; seven stated invariants hold on
+  405/405 corpus sessions, and `MAX_BUCKETS` stays 240 because finer buckets
+  are now derivable from the events. The facts stopped emitting `null` for
+  absent optional fields (397 of 405 sessions' bytes, zero values moved) and
+  `subagents` became the set it was documented as; both tiers count through
+  one `Counter`; a hand-written fixture with five goldens driven through the
+  built binary, and CI running `just check`. Front-end v1 is unblocked. See
+  `sprints/009-facts-learn-detail-contract-gets-honest.md`.
+
 ## Now
 
-- **The facts learn detail (sprint 009).** The contract work the app needs:
-  a per-event detail tier (tool calls with name, timing, outcome) so a
-  timeline segment can answer a click — leaning a *separate document* under
-  the same contract discipline, so the summary stays light and detail loads
-  on demand; the `MAX_BUCKETS` ceiling gets revisited here. Bundled with the
-  contract hygiene the 006 review found, so one baseline regeneration covers
-  it all: emit absent-not-null as the contract already promises, one shared
-  accumulator for both counting tiers, and the in-repo fixture + CI + golden
-  render test that make the guarantees reproducible from a clone.
+- Nothing in flight. The natural next is the front-end (below), now that
+  009 has landed the document it reads last.
 
 ## Next
 
@@ -123,8 +130,8 @@ since day one.
   static from the same host as the collected data, reading the session index
   → facts → events over HTTP with no backend. Timeline pan/zoom (#1591
   proper: forest, tree, leaf), click a segment for the drill-down. Queued as
-  a WI; propose once 009 has landed and the events document's shape is
-  proven — 007 shipped the index it reads first.
+  a WI (#1619); 007 shipped the index it reads first and 009 the events
+  document it reads last, so it can be proposed now.
 - Cross-session views: how a project's sessions trend over time — the
   collected `live/` store is what makes this possible at all.
 - Compare two sessions side by side (the harness-eval use case).

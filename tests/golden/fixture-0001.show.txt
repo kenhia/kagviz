@@ -1,0 +1,36 @@
+session   fixture-0001
+project   -home-ken-src-example
+cwd       /home/ken/src/example
+cli       2.1.230, 2.1.240
+models    claude-opus-5
+time      8m active / 2h13m wall (2h04m idle)
+phases    5 (mostly implementing)
+               2  implementing  5m
+               2  delegating    2m
+               1  exploring     1m
+turns     16 assistant, 4 user prompts
+tools     16 calls, 2 failed (6.25%)
+               2  Agent
+               1  AskUserQuestion
+               4  Bash  (1 failed)
+               1  Edit
+               1  Grep
+               2  Read
+               1  Skill
+               1  Write
+               2  mcp__kaed-kai__edit
+               1  mcp__korg__update_work_item
+files     4 touched, +9/-2  [5 opaque call(s) unaccounted]
+               4  Bash  (4 unreadable)
+               1  Edit  (1 file(s) +2/-1)
+               1  Write  (1 file(s) +5/-0)
+               2  mcp__kaed-kai__edit  (2 file(s) +2/-1, 1 unreadable)
+tokens    2048 out (480 thinking), 116400 cache read
+pasted    1 image(s)/document(s)
+asked     1 question(s) of the user
+skills    commit
+subagents Explore, Plan  (1 transcript(s))
+delegated 1 agent(s), 3 tool call(s), 2,100 out
+            Explore       3 call(s)      15s     2,100 out  Find other scripts with flags
+            1 spawn(s) have no transcript; their work is not counted here
+combined  19 tool call(s), 3 failed, 4,148 out  (session + delegated)

@@ -5,6 +5,7 @@
 //! model-written narrative sits *on top* of this, never inside it.
 
 use crate::discover::SessionPaths;
+use crate::events;
 use crate::transcript::{
     Block, Content, INJECTED_PREFIXES, Record, Subagent, Transcript, command_line,
 };
@@ -12,6 +13,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
 /// Gaps at or above this are counted as idle, not work.
 ///
@@ -51,7 +53,7 @@ const EXPLORING_READ_PCT: u32 = 50;
 const RUNNING_RUN_PCT: u32 = 50;
 const DELEGATING_PCT: u32 = 34;
 
-#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct TokenTotals {
     pub input: u64,
@@ -177,8 +179,12 @@ impl Activity {
 /// MCP server being added: it is a small table plus one rule for MCP names,
 /// not an inventory. A tool nobody has taught it about lands in `Other`, which
 /// dilutes every share equally rather than distorting one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ToolClass {
+///
+/// Carried on every `tool` event in the events document, so a consumer that
+/// colours by class agrees with the facts' phase `kind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolClass {
     Read,
     Edit,
     Run,
@@ -348,6 +354,7 @@ pub struct Phase {
     pub mix: ToolMix,
     /// Preview of the user turn that opened this phase. Absent when the phase
     /// opens a resumed span instead — work picked up again with nothing said.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub opened_by: Option<String>,
 }
 
@@ -362,6 +369,7 @@ pub struct Phase {
 pub enum Involvement {
     /// The user said something — typed text, a pasted image, or both.
     Prompt {
+        #[serde(skip_serializing_if = "Option::is_none")]
         at: Option<DateTime<Utc>>,
         /// The first [`PREVIEW_CHARS`] characters, whitespace collapsed.
         preview: String,
@@ -372,10 +380,13 @@ pub enum Involvement {
     /// The agent stopped and asked. `chosen` is absent when the transcript
     /// holds no answer — an interrupted question, not a silent one.
     Question {
+        #[serde(skip_serializing_if = "Option::is_none")]
         at: Option<DateTime<Utc>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         header: Option<String>,
         question: String,
         options: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         chosen: Option<String>,
     },
 }
@@ -398,20 +409,26 @@ impl Involvement {
 #[serde(default)]
 pub struct Spawn {
     /// Joins the sidecar file, its records, and the parent's `Agent` result.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
     /// From the parent's `Agent` call input, when the spawn could be joined.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub subagent_type: Option<String>,
     /// From the parent's `Agent` result — what the agent was asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// `resolvedModel` from the parent's `Agent` result. A delegated turn can
     /// run on a different model than the session it was spawned from, which is
     /// exactly the kind of cost a reader wants to see.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// True when the numbers came from a `subagents/agent-*.jsonl` sidecar,
     /// false when they came from `isSidechain` records inlined in the parent
     /// by an older CLI.
     pub sidecar: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub started: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ended: Option<DateTime<Utc>>,
     /// Wall span less idle gaps, by the same [`IDLE_GAP_SECS`] rule the parent
     /// uses. **Not** addable to the parent's `active_secs`: a subagent runs
@@ -470,14 +487,20 @@ impl Delegation {
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Summary {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub git_branch: Option<String>,
     pub cli_versions: BTreeSet<String>,
     pub models: BTreeMap<String, u32>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub started: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ended: Option<DateTime<Utc>>,
     pub wall_secs: i64,
     pub active_secs: i64,
@@ -606,11 +629,27 @@ fn may_edit_opaquely(tool: &str) -> bool {
 /// sidecars. They are passed in rather than read here so this stays a pure
 /// function of bytes the caller supplies — the property the whole facts
 /// contract rests on. Callers with none pass `&[]`.
+///
+/// The facts alone; [`summarize_with_events`] is the same pass keeping the
+/// events document it builds on the way.
 pub fn summarize(
     paths: Option<&SessionPaths>,
     transcript: &Transcript,
     subagents: &[Subagent],
 ) -> Summary {
+    summarize_with_events(paths, transcript, subagents).0
+}
+
+/// Count a session and keep the events tier: the facts, and the document of
+/// every turn and tool call they were counted from, each joined to its phase.
+///
+/// One pass, not two, so the two documents cannot disagree — the events are
+/// what the counts are counts *of*.
+pub fn summarize_with_events(
+    paths: Option<&SessionPaths>,
+    transcript: &Transcript,
+    subagents: &[Subagent],
+) -> (Summary, events::Events) {
     let records = &transcript.records;
     let mut s = Summary {
         skipped_lines: transcript.skipped,
@@ -620,11 +659,14 @@ pub fn summarize(
         ..Summary::default()
     };
 
-    // tool_use id -> tool name, so an is_error result can be blamed correctly.
-    let mut tool_names: BTreeMap<String, String> = BTreeMap::new();
-    let mut stamps: Vec<DateTime<Utc>> = Vec::new();
-    let mut events: Vec<Event> = Vec::new();
-    let mut tally = ChangeTally::default();
+    // The counts both tiers share — turns, tokens, tool calls, failures, the
+    // file-change tally, the events — through the one accumulator a spawn
+    // counts with.
+    let mut counter = Counter::default();
+    let mut ticks: Vec<Tick> = Vec::new();
+    // Events from records with no timestamp. No bucket or phase can hold
+    // them, so they go last and unplaced rather than nowhere.
+    let mut unplaced: Vec<Range<usize>> = Vec::new();
     // AskUserQuestion tool_use id -> the involvement entries it produced, so
     // the answers on its result can be filled in when they arrive.
     let mut open_questions: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -649,10 +691,15 @@ pub fn summarize(
                 .push(rec);
             continue;
         }
-        let at = rec.timestamp.as_deref().and_then(parse_stamp);
-        let mut event = Event {
+        let counted = counter.count(rec);
+        let at = counted.at;
+        let mut tick = Tick {
             at,
-            ..Event::default()
+            tool_calls: counted.tool_calls,
+            tool_failures: counted.tool_failures,
+            output_tokens: counted.output_tokens,
+            events: counted.events,
+            ..Tick::default()
         };
 
         if s.session_id.is_none() {
@@ -667,38 +714,23 @@ pub fn summarize(
         if s.git_branch.is_none() {
             s.git_branch.clone_from(&rec.git_branch);
         }
-        if let Some(ts) = at {
-            stamps.push(ts);
-        }
-
+        // What a session has that a spawn does not, layered *beside* the
+        // shared count rather than inside it: the tool mix a phase is named
+        // from, and the structure — questions, skills, spawns — joined later.
         if rec.kind == "assistant"
             && let Some(msg) = &rec.message
         {
-            s.assistant_turns += 1;
             if let Some(model) = &msg.model {
                 *s.models.entry(model.clone()).or_default() += 1;
-            }
-            if let Some(u) = msg.usage {
-                s.tokens.input += u.input_tokens;
-                s.tokens.output += u.output_tokens;
-                s.tokens.thinking += u.output_tokens_details.thinking_tokens;
-                s.tokens.cache_read += u.cache_read_input_tokens;
-                s.tokens.cache_write += u.cache_creation_input_tokens;
-                event.output_tokens += u.output_tokens;
             }
             for block in msg.content.blocks() {
                 if block.kind != "tool_use" {
                     continue;
                 }
-                let Some(name) = block.name.clone() else {
+                let Some(name) = &block.name else {
                     continue;
                 };
-                *s.tool_calls.entry(name.clone()).or_default() += 1;
-                event.tool_calls += 1;
-                event.mix.add(classify_tool(&name));
-                if let Some(id) = &block.id {
-                    tool_names.insert(id.clone(), name.clone());
-                }
+                tick.mix.add(classify_tool(name));
                 match name.as_str() {
                     "AskUserQuestion" => {
                         s.ask_user_questions += 1;
@@ -740,9 +772,9 @@ pub fn summarize(
             s.pasted_attachments += attachments;
             if is_user_turn(rec, &msg.content) {
                 s.user_prompts += 1;
-                event.user_turns += 1;
+                tick.user_turns += 1;
                 let (preview, truncated) = preview_of(&msg.content);
-                event.user_preview = Some(preview.clone());
+                tick.user_preview = Some(preview.clone());
                 s.user_involvement.push(Involvement::Prompt {
                     at,
                     preview,
@@ -753,16 +785,6 @@ pub fn summarize(
             for block in msg.content.blocks() {
                 if block.kind != "tool_result" {
                     continue;
-                }
-                if block.is_error.unwrap_or(false) {
-                    let name = block
-                        .tool_use_id
-                        .as_ref()
-                        .and_then(|id| tool_names.get(id))
-                        .cloned()
-                        .unwrap_or_else(|| "<unknown>".to_string());
-                    *s.tool_failures.entry(name).or_default() += 1;
-                    event.tool_failures += 1;
                 }
                 if let Some(id) = &block.tool_use_id
                     && let Some(indices) = open_questions.remove(id)
@@ -799,56 +821,47 @@ pub fn summarize(
             }
         }
 
-        if let Some(result) = &rec.tool_use_result {
-            // The tally is keyed by tool, and the name lives on the *call*, so
-            // it is joined through `tool_use_id` exactly as failures are. A
-            // result whose call is not in this file reads as `<unknown>`,
-            // which still gets the default adapter — the same reading it got
-            // before there was a table.
-            let (tool, failed) = result_call(rec, &tool_names).unwrap_or(("<unknown>", false));
-            tally.absorb(tool, result, failed);
-        }
-
-        if event.at.is_some() {
-            events.push(event);
+        if tick.at.is_some() {
+            ticks.push(tick);
+        } else {
+            unplaced.push(tick.events);
         }
     }
 
-    // Shell tools that ran at all. Counted as "could have changed files
-    // unseen", never as changes. Every one of them is opaque by construction,
-    // so they are added from the call tally rather than from results — an
-    // interrupted `Bash` leaves no result and is still an edit kagviz cannot
-    // see.
-    for (name, n) in &s.tool_calls {
-        if may_edit_opaquely(name) {
-            tally.opaque(name, *n as usize);
-        }
+    let counts = counter.finish();
+    if let Some((first, last)) = counts.window() {
+        s.started = Some(first);
+        s.ended = Some(last);
+        (s.wall_secs, s.idle_secs) = wall_and_idle(&counts.stamps);
     }
-    s.changes = tally.finish();
+    s.assistant_turns = counts.assistant_turns;
+    s.tool_calls = counts.tool_calls;
+    s.tool_failures = counts.tool_failures;
+    s.tokens = counts.tokens;
+    s.changes = counts.changes;
 
+    // Both are the *set* of what was invoked: two `Explore` spawns are one
+    // kind of delegate, and how many there were is `delegation`'s to say.
     s.skills.sort();
     s.skills.dedup();
     s.subagents.sort();
+    s.subagents.dedup();
 
-    stamps.sort_unstable();
-    if let (Some(first), Some(last)) = (stamps.first(), stamps.last()) {
-        s.started = Some(*first);
-        s.ended = Some(*last);
-        (s.wall_secs, s.idle_secs) = wall_and_idle(&stamps);
-    }
-
-    s.delegation = build_delegation(subagents, &inline, &spawn_meta, agent_call_total);
+    let (delegation, spawn_events) =
+        build_delegation(subagents, &inline, &spawn_meta, agent_call_total);
+    s.delegation = delegation;
 
     // Records are appended in order, but a transcript that merged two writers
     // need not be sorted; the series is built from time, not from file order.
-    events.sort_by_key(|e| e.at);
+    ticks.sort_by_key(|t| t.at);
     // Spans and phases are two cuts of the same event stream, so the idle
     // split is computed once and shared: a phase boundary that disagreed with
     // a span boundary would put a phase across a gap the strip has collapsed.
-    let times: Vec<DateTime<Utc>> = events.iter().filter_map(|e| e.at).collect();
+    let times: Vec<DateTime<Utc>> = ticks.iter().filter_map(|t| t.at).collect();
     let ranges = split_spans(&times);
-    s.activity = build_activity(&events, &times, &ranges);
-    s.phases = build_phases(&events, &times, &ranges);
+    s.activity = build_activity(&ticks, &times, &ranges);
+    let (phases, phase_of) = build_phases(&ticks, &times, &ranges);
+    s.phases = phases;
     // Read back off the spans rather than recomputed, so `active_secs` is the
     // sum of the stretches *by construction*. `wall_secs - idle_secs` is the
     // same quantity through two truncations against the spans' one each, and
@@ -857,7 +870,42 @@ pub fn summarize(
     // and the phase list one number instead of three that nearly agree.
     s.active_secs = s.activity.spans.iter().map(|sp| sp.secs).sum();
 
-    s
+    // The events, in the order the strip and the phases were cut in, each
+    // stamped with the phase that holds its record. What no phase can hold —
+    // a record with no timestamp — comes last, unplaced.
+    let order = ticks
+        .iter()
+        .zip(&phase_of)
+        .map(|(t, &p)| (t.events.clone(), Some(p)))
+        .chain(unplaced.into_iter().map(|r| (r, None)));
+    let events = events::Events {
+        session_id: s.session_id.clone(),
+        events: place_events(counts.events, order),
+        spawns: spawn_events,
+    };
+
+    (s, events)
+}
+
+/// Lay a pass's events out in `order`: ranges of the pass's list, each with
+/// the phase to stamp on them. Every event is placed exactly once.
+fn place_events(
+    pool: Vec<events::Event>,
+    order: impl Iterator<Item = (Range<usize>, Option<usize>)>,
+) -> Vec<events::Event> {
+    let mut pool: Vec<Option<events::Event>> = pool.into_iter().map(Some).collect();
+    let mut out = Vec::with_capacity(pool.len());
+    for (range, phase) in order {
+        for k in range {
+            let mut e = pool[k]
+                .take()
+                .expect("an event belongs to exactly one record");
+            e.set_phase(phase);
+            out.push(e);
+        }
+    }
+    debug_assert!(pool.iter().all(Option::is_none), "every event is placed");
+    out
 }
 
 /// What the parent's `Agent` call and result say about one spawn.
@@ -928,31 +976,33 @@ fn build_delegation(
     inline: &BTreeMap<String, Vec<&Record>>,
     meta: &BTreeMap<String, SpawnMeta>,
     agent_call_total: usize,
-) -> Delegation {
+) -> (Delegation, Vec<events::SpawnEvents>) {
     let mut d = Delegation::default();
 
     let mut tier = ChangeTally::default();
+    // Each spawn beside its events, so the two stay in one order.
+    let mut spawns: Vec<(Spawn, Vec<events::Event>)> = Vec::new();
 
     for sub in subagents {
         let records: Vec<&Record> = sub.transcript.records.iter().collect();
-        let (mut spawn, tally) = summarize_spawn(&records, sub.transcript.skipped, true);
+        let (mut spawn, tally, ev) = summarize_spawn(&records, sub.transcript.skipped, true);
         if spawn.agent_id.is_none() {
             spawn.agent_id.clone_from(&sub.agent_id);
         }
         tier.merge(&tally);
-        d.spawns.push(spawn);
+        spawns.push((spawn, ev));
     }
     for (agent_id, records) in inline {
         d.inline_records += records.len();
-        let (mut spawn, tally) = summarize_spawn(records, 0, false);
+        let (mut spawn, tally, ev) = summarize_spawn(records, 0, false);
         if spawn.agent_id.is_none() && !agent_id.is_empty() {
             spawn.agent_id = Some(agent_id.clone());
         }
         tier.merge(&tally);
-        d.spawns.push(spawn);
+        spawns.push((spawn, ev));
     }
 
-    for spawn in &mut d.spawns {
+    for (spawn, _) in &mut spawns {
         if let Some(m) = spawn.agent_id.as_deref().and_then(|id| meta.get(id)) {
             spawn.subagent_type.clone_from(&m.subagent_type);
             spawn.description.clone_from(&m.description);
@@ -960,8 +1010,15 @@ fn build_delegation(
         }
     }
     // Stable order regardless of how the filesystem enumerated the sidecars.
-    d.spawns
-        .sort_by(|a, b| (&a.started, &a.agent_id).cmp(&(&b.started, &b.agent_id)));
+    spawns.sort_by(|a, b| (&a.0.started, &a.0.agent_id).cmp(&(&b.0.started, &b.0.agent_id)));
+    let mut spawn_events = Vec::with_capacity(spawns.len());
+    for (spawn, ev) in spawns {
+        spawn_events.push(events::SpawnEvents {
+            agent_id: spawn.agent_id.clone(),
+            events: ev,
+        });
+        d.spawns.push(spawn);
+    }
 
     // Every `Agent` call the parent made that no transcript accounts for. The
     // work happened; kagviz cannot see it. Saying nothing would render it as
@@ -985,7 +1042,7 @@ fn build_delegation(
         t.tokens.cache_write += spawn.tokens.cache_write;
     }
     t.changes = tier.finish();
-    d
+    (d, spawn_events)
 }
 
 /// Count one delegated agent's records.
@@ -994,47 +1051,177 @@ fn build_delegation(
 /// turns, so phases, the activity strip and user involvement are all vacuous
 /// for it, and carrying them would multiply the size of the facts document for
 /// no reader. What a spawn has is cost and output, and that is what is kept.
-fn summarize_spawn(records: &[&Record], skipped: usize, sidecar: bool) -> (Spawn, ChangeTally) {
+fn summarize_spawn(
+    records: &[&Record],
+    skipped: usize,
+    sidecar: bool,
+) -> (Spawn, ChangeTally, Vec<events::Event>) {
     let mut spawn = Spawn {
         sidecar,
         records: records.len(),
         skipped_lines: skipped,
         ..Spawn::default()
     };
-    let mut tool_names: BTreeMap<String, String> = BTreeMap::new();
-    let mut tally = ChangeTally::default();
-    let mut stamps: Vec<DateTime<Utc>> = Vec::new();
-
+    let mut counter = Counter::default();
+    let mut ticks: Vec<(Option<DateTime<Utc>>, Range<usize>)> = Vec::new();
     for rec in records {
         if spawn.agent_id.is_none() {
             spawn.agent_id.clone_from(&rec.agent_id);
         }
-        if let Some(at) = rec.timestamp.as_deref().and_then(parse_stamp) {
-            stamps.push(at);
+        let counted = counter.count(rec);
+        ticks.push((counted.at, counted.events));
+    }
+
+    let counts = counter.finish();
+    if let Some((first, last)) = counts.window() {
+        spawn.started = Some(first);
+        spawn.ended = Some(last);
+        spawn.active_secs = active_from_stretches(&counts.stamps);
+    }
+    spawn.assistant_turns = counts.assistant_turns;
+    spawn.tool_calls = counts.tool_calls;
+    spawn.tool_failures = counts.tool_failures;
+    spawn.tokens = counts.tokens;
+    spawn.changes = counts.changes;
+
+    // The same order the session's own tier keeps: by time, ties in record
+    // order, untimestamped last. No phase — a spawn has no place on the
+    // parent's timeline.
+    ticks.sort_by_key(|(at, _)| (at.is_none(), *at));
+    let order = ticks.into_iter().map(|(_, r)| (r, None));
+    (spawn, counts.tally, place_events(counts.events, order))
+}
+
+/// The per-record count both tiers are built from.
+///
+/// [`summarize`] and [`summarize_spawn`] used to carry two copies of this
+/// walk — turns, tokens, tool calls, failures blamed through the call table,
+/// the file-change tally — and a quantity added to one and not the other
+/// silently made the tiers non-comparable. There is one walk now. What a
+/// session has that a spawn does not (user turns, phases, involvement, the
+/// delegated tier itself) is layered on *beside* it by `summarize`, never
+/// inside it, so the numbers the two tiers print side by side are counted by
+/// the same code.
+#[derive(Debug, Default)]
+struct Counter {
+    /// tool_use id -> tool name, so a result can be blamed on its call.
+    tool_names: BTreeMap<String, String>,
+    /// Every timestamp seen, in record order until [`Counter::finish`].
+    stamps: Vec<DateTime<Utc>>,
+    assistant_turns: usize,
+    tool_calls: BTreeMap<String, u32>,
+    tool_failures: BTreeMap<String, u32>,
+    tokens: TokenTotals,
+    changes: ChangeTally,
+    /// Every turn and tool call seen, in record order — the events tier,
+    /// built by the same walk that counts them so the two cannot disagree.
+    events: Vec<events::Event>,
+    /// tool_use id -> index into `events`, so a result joins its call.
+    open: BTreeMap<String, usize>,
+}
+
+/// What one record contributed: the slice of the count a bucket or a phase
+/// is built from, and this record's events as a range of the pass's list.
+#[derive(Debug, Default, Clone)]
+struct Counted {
+    at: Option<DateTime<Utc>>,
+    tool_calls: u32,
+    tool_failures: u32,
+    output_tokens: u64,
+    events: Range<usize>,
+}
+
+/// A finished pass, ready to be carried by either tier.
+#[derive(Debug)]
+struct Counts {
+    assistant_turns: usize,
+    tool_calls: BTreeMap<String, u32>,
+    tool_failures: BTreeMap<String, u32>,
+    tokens: TokenTotals,
+    changes: FileChanges,
+    /// The tally behind `changes`, kept so a spawn's can be merged into the
+    /// tier's without re-reading anything.
+    tally: ChangeTally,
+    /// Sorted.
+    stamps: Vec<DateTime<Utc>>,
+    /// In record order; the caller lays them out in cut order.
+    events: Vec<events::Event>,
+}
+
+impl Counter {
+    /// Count one record.
+    fn count(&mut self, rec: &Record) -> Counted {
+        let at = rec.timestamp.as_deref().and_then(parse_stamp);
+        let start = self.events.len();
+        let mut counted = Counted {
+            at,
+            ..Counted::default()
+        };
+        if let Some(at) = at {
+            self.stamps.push(at);
         }
 
         if rec.kind == "assistant"
             && let Some(msg) = &rec.message
         {
-            spawn.assistant_turns += 1;
-            if let Some(u) = msg.usage {
-                spawn.tokens.input += u.input_tokens;
-                spawn.tokens.output += u.output_tokens;
-                spawn.tokens.thinking += u.output_tokens_details.thinking_tokens;
-                spawn.tokens.cache_read += u.cache_read_input_tokens;
-                spawn.tokens.cache_write += u.cache_creation_input_tokens;
+            self.assistant_turns += 1;
+            let tokens = msg.usage.map(|u| TokenTotals {
+                input: u.input_tokens,
+                output: u.output_tokens,
+                thinking: u.output_tokens_details.thinking_tokens,
+                cache_read: u.cache_read_input_tokens,
+                cache_write: u.cache_creation_input_tokens,
+            });
+            if let Some(t) = &tokens {
+                self.tokens.input += t.input;
+                self.tokens.output += t.output;
+                self.tokens.thinking += t.thinking;
+                self.tokens.cache_read += t.cache_read;
+                self.tokens.cache_write += t.cache_write;
+                counted.output_tokens += t.output;
             }
-            for block in msg.content.blocks() {
-                if block.kind != "tool_use" {
-                    continue;
-                }
-                let Some(name) = block.name.clone() else {
-                    continue;
-                };
-                *spawn.tool_calls.entry(name.clone()).or_default() += 1;
+            let calls: Vec<&Block> = msg
+                .content
+                .blocks()
+                .iter()
+                .filter(|b| b.kind == "tool_use" && b.name.is_some())
+                .collect();
+            // The turn first, then its calls in the order the message made
+            // them — the adjacency a consumer groups on.
+            self.events.push(events::Event::Turn {
+                at,
+                phase: None,
+                model: msg.model.clone(),
+                tokens,
+                tools: calls.len() as u32,
+            });
+            for block in calls {
+                let name = block.name.as_deref().unwrap_or_default();
+                *self.tool_calls.entry(name.to_string()).or_default() += 1;
+                counted.tool_calls += 1;
                 if let Some(id) = &block.id {
-                    tool_names.insert(id.clone(), name);
+                    self.tool_names.insert(id.clone(), name.to_string());
+                    self.open.insert(id.clone(), self.events.len());
                 }
+                self.events.push(events::Event::Tool {
+                    at,
+                    phase: None,
+                    tool: name.to_string(),
+                    class: classify_tool(name),
+                    id: block.id.clone(),
+                    input_bytes: events::input_bytes(block.input.as_ref()),
+                    result_at: None,
+                    failed: false,
+                    result_bytes: None,
+                    files: Vec::new(),
+                    lines_added: None,
+                    lines_deleted: None,
+                    // A shell call is opaque from the moment it is made: an
+                    // interrupted one leaves no result and is still an edit
+                    // kagviz cannot see. The tally counts the same thing
+                    // from the call totals in `finish`.
+                    opaque: may_edit_opaquely(name),
+                });
             }
         }
 
@@ -1042,43 +1229,123 @@ fn summarize_spawn(records: &[&Record], skipped: usize, sidecar: bool) -> (Spawn
             && let Some(msg) = &rec.message
         {
             for block in msg.content.blocks() {
-                if block.kind == "tool_result" && block.is_error.unwrap_or(false) {
+                if block.kind != "tool_result" {
+                    continue;
+                }
+                let failed = block.is_error.unwrap_or(false);
+                if failed {
                     let name = block
                         .tool_use_id
                         .as_ref()
-                        .and_then(|id| tool_names.get(id))
+                        .and_then(|id| self.tool_names.get(id))
                         .cloned()
                         .unwrap_or_else(|| "<unknown>".to_string());
-                    *spawn.tool_failures.entry(name).or_default() += 1;
+                    *self.tool_failures.entry(name).or_default() += 1;
+                    counted.tool_failures += 1;
+                }
+                // Join the result to its call. A result whose call is not in
+                // this file has no event to land on; the facts already count
+                // it under `<unknown>`.
+                if let Some(&idx) = block.tool_use_id.as_ref().and_then(|id| self.open.get(id))
+                    && let Some(events::Event::Tool {
+                        result_at,
+                        failed: was_failed,
+                        result_bytes,
+                        ..
+                    }) = self.events.get_mut(idx)
+                {
+                    *result_at = at;
+                    *was_failed = failed;
+                    *result_bytes = Some(events::text_bytes(block.content.as_ref()));
                 }
             }
         }
 
         if let Some(result) = &rec.tool_use_result {
-            let (tool, failed) = result_call(rec, &tool_names).unwrap_or(("<unknown>", false));
-            tally.absorb(tool, result, failed);
+            // The tally is keyed by tool, and the name lives on the *call*, so
+            // it is joined through `tool_use_id` exactly as failures are. A
+            // result whose call is not in this file reads as `<unknown>`,
+            // which still gets the default adapter — the same reading it got
+            // before there was a table.
+            let (tool, failed) = result_call(rec, &self.tool_names).unwrap_or(("<unknown>", false));
+            let recovered = recover_changes(tool, result);
+            let counted_opaque = self.changes.record(tool, recovered.as_ref(), failed);
+            // And the same reading onto the event, so a per-call sum of these
+            // is the facts' `changes` exactly.
+            if let Some(idx) = result_index(rec, &self.open)
+                && let Some(events::Event::Tool {
+                    files,
+                    lines_added,
+                    lines_deleted,
+                    opaque,
+                    ..
+                }) = self.events.get_mut(idx)
+            {
+                if let Some(r) = &recovered {
+                    files.clone_from(&r.files);
+                    if r.lines_known {
+                        *lines_added = Some(r.added);
+                        *lines_deleted = Some(r.deleted);
+                    }
+                }
+                *opaque |= counted_opaque;
+            }
         }
+        counted.events = start..self.events.len();
+        counted
     }
 
-    for (name, n) in &spawn.tool_calls {
-        if may_edit_opaquely(name) {
-            tally.opaque(name, *n as usize);
+    /// Close the pass.
+    ///
+    /// Shell tools that ran at all are counted as "could have changed files
+    /// unseen", never as changes. Every one of them is opaque by construction,
+    /// so they are added from the call tally rather than from results — an
+    /// interrupted `Bash` leaves no result and is still an edit kagviz cannot
+    /// see.
+    fn finish(mut self) -> Counts {
+        for (name, n) in &self.tool_calls {
+            if may_edit_opaquely(name) {
+                self.changes.opaque(name, *n as usize);
+            }
+        }
+        self.stamps.sort_unstable();
+        Counts {
+            assistant_turns: self.assistant_turns,
+            tool_calls: self.tool_calls,
+            tool_failures: self.tool_failures,
+            tokens: self.tokens,
+            changes: self.changes.finish(),
+            tally: self.changes,
+            stamps: self.stamps,
+            events: self.events,
         }
     }
-    spawn.changes = tally.finish();
+}
 
-    stamps.sort_unstable();
-    if let (Some(first), Some(last)) = (stamps.first(), stamps.last()) {
-        spawn.started = Some(*first);
-        spawn.ended = Some(*last);
-        spawn.active_secs = active_from_stretches(&stamps);
+impl Counts {
+    /// First and last timestamp, when there was one.
+    fn window(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+        Some((*self.stamps.first()?, *self.stamps.last()?))
     }
-    (spawn, tally)
+}
+
+/// The event a result record's `toolUseResult` belongs to: the first
+/// `tool_result` block whose call this pass has seen — the same block
+/// [`result_call`] names the tool from, so the tally and the event read one
+/// payload the same way.
+fn result_index(rec: &Record, open: &BTreeMap<String, usize>) -> Option<usize> {
+    rec.message
+        .as_ref()
+        .map(|m| m.content.blocks())
+        .unwrap_or_default()
+        .iter()
+        .filter(|b| b.kind == "tool_result")
+        .find_map(|b| open.get(b.tool_use_id.as_ref()?).copied())
 }
 
 /// One record's contribution to the activity series and the phase cut.
 #[derive(Debug, Default, Clone)]
-struct Event {
+struct Tick {
     at: Option<DateTime<Utc>>,
     tool_calls: u32,
     tool_failures: u32,
@@ -1090,6 +1357,9 @@ struct Event {
     mix: ToolMix,
     /// Set only on a real user turn: the preview that opens a phase.
     user_preview: Option<String>,
+    /// This record's events, as a range of the pass's list — stamped with a
+    /// phase once the cut is known.
+    events: Range<usize>,
 }
 
 /// Inclusive index ranges of continuous work, cut wherever a gap reaches
@@ -1114,11 +1384,7 @@ fn split_spans(times: &[DateTime<Utc>]) -> Vec<(usize, usize)> {
 }
 
 /// Bucket each span of the event stream at a width chosen for the session.
-fn build_activity(
-    events: &[Event],
-    times: &[DateTime<Utc>],
-    ranges: &[(usize, usize)],
-) -> Activity {
+fn build_activity(ticks: &[Tick], times: &[DateTime<Utc>], ranges: &[(usize, usize)]) -> Activity {
     if times.is_empty() {
         return Activity::default();
     }
@@ -1132,14 +1398,14 @@ fn build_activity(
         let secs = (ended - started).num_seconds();
         let count = bucket_count(secs, bucket_secs);
         let mut buckets = vec![Bucket::default(); count];
-        for (event, at) in events[a..=b].iter().zip(&times[a..=b]) {
+        for (tick, at) in ticks[a..=b].iter().zip(&times[a..=b]) {
             let idx = (((*at - started).num_seconds() / bucket_secs) as usize).min(count - 1);
             let bucket = &mut buckets[idx];
             bucket.records += 1;
-            bucket.tool_calls += event.tool_calls;
-            bucket.tool_failures += event.tool_failures;
-            bucket.user_turns += event.user_turns;
-            bucket.output_tokens += event.output_tokens;
+            bucket.tool_calls += tick.tool_calls;
+            bucket.tool_failures += tick.tool_failures;
+            bucket.user_turns += tick.user_turns;
+            bucket.output_tokens += tick.output_tokens;
         }
         spans.push(ActivitySpan {
             started,
@@ -1168,30 +1434,37 @@ fn build_activity(
 /// are real work time, and giving them to neither phase would make the phase
 /// durations quietly fail to add up to active time — a shortfall a reader
 /// would have no way to see. Phases therefore tile their span exactly.
+///
+/// Also returns, for every tick, the index of the phase that holds it — what
+/// the events document stamps on each event.
 fn build_phases(
-    events: &[Event],
+    ticks: &[Tick],
     times: &[DateTime<Utc>],
     ranges: &[(usize, usize)],
-) -> Vec<Phase> {
+) -> (Vec<Phase>, Vec<usize>) {
     let mut phases = Vec::new();
+    let mut phase_of = vec![0usize; times.len()];
     for (span, &(a, b)) in ranges.iter().enumerate() {
         let mut cuts = vec![a];
-        cuts.extend(((a + 1)..=b).filter(|&i| events[i].user_turns > 0));
+        cuts.extend(((a + 1)..=b).filter(|&i| ticks[i].user_turns > 0));
         for (k, &start) in cuts.iter().enumerate() {
             let (last, ends_at) = match cuts.get(k + 1) {
                 Some(&next) => (next - 1, times[next]),
                 None => (b, times[b]),
             };
+            for slot in &mut phase_of[start..=last] {
+                *slot = phases.len();
+            }
             phases.push(phase_from(
-                events, times, span, times[a], start, last, ends_at,
+                ticks, times, span, times[a], start, last, ends_at,
             ));
         }
     }
-    phases
+    (phases, phase_of)
 }
 
 fn phase_from(
-    events: &[Event],
+    ticks: &[Tick],
     times: &[DateTime<Utc>],
     span: usize,
     span_started: DateTime<Utc>,
@@ -1203,11 +1476,11 @@ fn phase_from(
     let mut tool_calls = 0;
     let mut tool_failures = 0;
     let mut output_tokens = 0;
-    for e in &events[a..=b] {
-        tool_calls += e.tool_calls;
-        tool_failures += e.tool_failures;
-        output_tokens += e.output_tokens;
-        mix.absorb(&e.mix);
+    for t in &ticks[a..=b] {
+        tool_calls += t.tool_calls;
+        tool_failures += t.tool_failures;
+        output_tokens += t.output_tokens;
+        mix.absorb(&t.mix);
     }
     let started = times[a];
     // Both ends measured as whole-second offsets from the span, then
@@ -1229,7 +1502,7 @@ fn phase_from(
         tool_failures,
         output_tokens,
         mix,
-        opened_by: events[a].user_preview.clone(),
+        opened_by: ticks[a].user_preview.clone(),
     }
 }
 
@@ -1658,8 +1931,11 @@ impl ChangeTally {
     /// `failed` is the call's own `is_error`. A refused edit changed nothing
     /// and is a known zero — counting it as opaque would manufacture an
     /// unknown out of the one case kagviz is certain about.
-    fn absorb(&mut self, tool: &str, result: &Value, failed: bool) {
-        match recover_changes(tool, result) {
+    ///
+    /// Returns whether the call was counted opaque, so the event for the same
+    /// call can say the same thing.
+    fn record(&mut self, tool: &str, recovered: Option<&Recovered>, failed: bool) -> bool {
+        match recovered {
             Some(rec) => {
                 let slot = self.changes.by_tool.entry(tool.to_string()).or_default();
                 slot.calls += 1;
@@ -1668,9 +1944,9 @@ impl ChangeTally {
                 self.changes.lines_added += rec.added;
                 self.changes.lines_deleted += rec.deleted;
                 let seen = self.by_tool_files.entry(tool.to_string()).or_default();
-                for f in rec.files {
+                for f in &rec.files {
                     seen.insert(f.clone());
-                    self.files.insert(f);
+                    self.files.insert(f.clone());
                 }
                 // Files known, lines not: the call still owes `opaque_edits` an
                 // entry, or `lines_added` would read as a total when it is a
@@ -1678,10 +1954,15 @@ impl ChangeTally {
                 if !rec.lines_known {
                     slot.opaque += 1;
                     self.changes.opaque_edits += 1;
+                    return true;
                 }
+                false
             }
-            None if edits_files(tool) && !failed => self.opaque(tool, 1),
-            None => {}
+            None if edits_files(tool) && !failed => {
+                self.opaque(tool, 1);
+                true
+            }
+            None => false,
         }
     }
 
@@ -2624,15 +2905,361 @@ mod tests {
         );
     }
 
+    /// `skills` and `subagents` are the *set* of what was invoked. Two
+    /// `Explore` spawns are one kind of delegate — and one chip on the page —
+    /// and how many there were is `delegation`'s to say (sprint 009).
     #[test]
     fn user_involvement_and_delegation_are_picked_up() {
         let t = transcript(&[r#"{"type":"assistant","message":{"content":[
                 {"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{}},
                 {"type":"tool_use","id":"t2","name":"Skill","input":{"skill":"sprint-ship"}},
-                {"type":"tool_use","id":"t3","name":"Agent","input":{"subagent_type":"Explore"}}]}}"#]);
+                {"type":"tool_use","id":"t3","name":"Agent","input":{"subagent_type":"Explore"}},
+                {"type":"tool_use","id":"t4","name":"Agent","input":{"subagent_type":"Explore"}}]}}"#]);
         let s = summarize(None, &t, &[]);
         assert_eq!(s.ask_user_questions, 1);
         assert_eq!(s.skills, vec!["sprint-ship"]);
-        assert_eq!(s.subagents, vec!["Explore"]);
+        assert_eq!(s.subagents, vec!["Explore"], "the set, not the calls");
+        assert_eq!(
+            s.delegation.unjoined_spawns, 2,
+            "the count lives in the tier"
+        );
+    }
+
+    /// The contract promised absent-not-`null` from the day it was written,
+    /// and the serializer kept that promise only for `labels` until sprint
+    /// 009. Every optional field the document carries is exercised empty
+    /// here — no identity fields, a resumed phase, a question with no header
+    /// and no answer, a sidecar no `Agent` result joins — and none of them
+    /// may reach the document as a key.
+    #[test]
+    fn optional_fields_are_absent_rather_than_null() {
+        let t = transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:00.000Z","message":{"content":[
+                {"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[
+                    {"question":"Ship?","options":[{"label":"Yes"}]}]}}]}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:05.000Z","message":{"content":[
+                {"type":"tool_result","tool_use_id":"t1","is_error":true}]}}"#,
+        ]);
+        let orphan = subagent(
+            "lonely",
+            &[
+                r#"{"type":"assistant","timestamp":"2026-08-20T10:00:02.000Z","message":{
+                "content":[{"type":"tool_use","id":"s1","name":"Read"}]}}"#,
+            ],
+        );
+        let s = summarize(None, &t, &[orphan]);
+        assert!(s.cwd.is_none() && s.git_branch.is_none() && s.session_id.is_none());
+        assert_eq!(
+            s.phases[0].opened_by, None,
+            "the span opened with nobody asking"
+        );
+        assert!(matches!(
+            &s.user_involvement[0],
+            Involvement::Question {
+                header: None,
+                chosen: None,
+                ..
+            }
+        ));
+        assert_eq!(s.delegation.spawns[0].subagent_type, None);
+
+        let json = serde_json::to_string_pretty(&s).unwrap();
+        assert!(
+            !json.contains("null"),
+            "a null reached the document:\n{json}"
+        );
+        for key in [
+            "cwd",
+            "git_branch",
+            "session_id",
+            "project",
+            "opened_by",
+            "header",
+            "chosen",
+            "subagent_type",
+            "description",
+            "model",
+        ] {
+            assert!(
+                !json.contains(&format!("\"{key}\"")),
+                "`{key}` was emitted with nothing to say"
+            );
+        }
+        // And absent reads back as absent — the round trip the renderer and
+        // the index both depend on.
+        let back: Summary = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.phases[0].opened_by, None);
+        assert_eq!(back.delegation.spawns[0].subagent_type, None);
+        assert_eq!(back.cwd, None);
+    }
+
+    use crate::events::{Event as Ev, Events};
+
+    fn with_events(lines: &[&str], subs: &[Subagent]) -> (Summary, Events) {
+        summarize_with_events(None, &transcript(lines), subs)
+    }
+
+    fn tools(ev: &Events) -> Vec<&Ev> {
+        ev.events
+            .iter()
+            .filter(|e| matches!(e, Ev::Tool { .. }))
+            .collect()
+    }
+
+    /// The events are what the counts are counts *of*: one `tool` event per
+    /// call, `failed` where the facts blamed a failure, `opaque` where the
+    /// facts counted an unknown, sizes read off the payloads, and every one
+    /// stamped with the phase that holds it — so a per-phase sum over the
+    /// events is the facts' phase, exactly.
+    #[test]
+    fn events_are_what_the_facts_counted() {
+        let (s, ev) = with_events(
+            &[
+                r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                    "content":"go"}}"#,
+                r#"{"type":"assistant","timestamp":"2026-08-20T10:00:10.000Z","message":{
+                    "model":"claude-opus-5","usage":{"output_tokens":40},
+                    "content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/a.rs"}},
+                               {"type":"tool_use","id":"t2","name":"Bash","input":{"command":"ls"}}]}}"#,
+                r#"{"type":"user","timestamp":"2026-08-20T10:00:12.000Z","message":{"content":[
+                    {"type":"tool_result","tool_use_id":"t1","content":"one\ntwo"}]}}"#,
+                r#"{"type":"user","timestamp":"2026-08-20T10:00:15.000Z","message":{"content":[
+                    {"type":"tool_result","tool_use_id":"t2","is_error":true,"content":"boom"}]}}"#,
+                r#"{"type":"user","timestamp":"2026-08-20T10:01:00.000Z","message":{
+                    "content":"now edit"}}"#,
+                r#"{"type":"assistant","timestamp":"2026-08-20T10:01:05.000Z","message":{
+                    "usage":{"output_tokens":90},
+                    "content":[{"type":"tool_use","id":"t3","name":"Edit","input":{"file_path":"/a.rs"}}]}}"#,
+                r#"{"type":"user","timestamp":"2026-08-20T10:01:06.000Z","message":{"content":[
+                    {"type":"tool_result","tool_use_id":"t3","content":[{"type":"text","text":"ok"}]}]},
+                    "toolUseResult":{"filePath":"/a.rs","structuredPatch":[{"lines":["+x","-y","+z"]}]}}"#,
+                r#"{"type":"assistant","timestamp":"2026-08-20T10:01:20.000Z","message":{
+                    "usage":{"output_tokens":5},"content":[{"type":"text","text":"done"}]}}"#,
+            ],
+            &[],
+        );
+
+        let calls = tools(&ev);
+        assert_eq!(calls.len() as u32, s.total_tool_calls());
+        let turns = ev
+            .events
+            .iter()
+            .filter(|e| matches!(e, Ev::Turn { .. }))
+            .count();
+        assert_eq!(turns, s.assistant_turns);
+        let failed = calls
+            .iter()
+            .filter(|e| matches!(e, Ev::Tool { failed: true, .. }))
+            .count();
+        assert_eq!(failed as u32, s.total_tool_failures());
+        let opaque = calls
+            .iter()
+            .filter(|e| matches!(e, Ev::Tool { opaque: true, .. }))
+            .count();
+        assert_eq!(
+            opaque, s.changes.opaque_edits,
+            "the shell call, and only it"
+        );
+
+        // The turn comes first, saying how many calls follow it.
+        assert!(matches!(
+            ev.events[0],
+            Ev::Turn {
+                tools: 2,
+                phase: Some(0),
+                ..
+            }
+        ));
+        match calls[0] {
+            Ev::Tool {
+                tool,
+                class,
+                phase,
+                input_bytes,
+                result_at,
+                failed,
+                result_bytes,
+                ..
+            } => {
+                assert_eq!(tool, "Read");
+                assert_eq!(*class, ToolClass::Read);
+                assert_eq!(*phase, Some(0));
+                assert_eq!(*input_bytes, Some(r#"{"file_path":"/a.rs"}"#.len()));
+                assert_eq!(
+                    result_at.map(|t| t.to_rfc3339()),
+                    Some("2026-08-20T10:00:12+00:00".into())
+                );
+                assert!(!failed);
+                assert_eq!(*result_bytes, Some("one\ntwo".len()));
+            }
+            other => panic!("expected the Read, got {other:?}"),
+        }
+        match calls[1] {
+            Ev::Tool {
+                tool,
+                failed,
+                opaque,
+                result_bytes,
+                files,
+                lines_added,
+                ..
+            } => {
+                assert_eq!(tool, "Bash");
+                assert!(*failed && *opaque);
+                assert_eq!(*result_bytes, Some(4));
+                assert!(files.is_empty() && lines_added.is_none());
+            }
+            other => panic!("expected the Bash, got {other:?}"),
+        }
+        match calls[2] {
+            Ev::Tool {
+                tool,
+                phase,
+                files,
+                lines_added,
+                lines_deleted,
+                opaque,
+                ..
+            } => {
+                assert_eq!(tool, "Edit");
+                assert_eq!(*phase, Some(1), "after the second prompt");
+                assert_eq!(files, &["/a.rs"]);
+                assert_eq!((*lines_added, *lines_deleted), (Some(2), Some(1)));
+                assert!(!opaque);
+            }
+            other => panic!("expected the Edit, got {other:?}"),
+        }
+
+        // Per phase, the events add up to the facts.
+        for (i, p) in s.phases.iter().enumerate() {
+            let n = calls
+                .iter()
+                .filter(|e| matches!(e, Ev::Tool { phase: Some(ph), .. } if *ph == i))
+                .count();
+            assert_eq!(n as u32, p.tool_calls, "phase {i} tool calls");
+            let out: u64 = ev
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    Ev::Turn {
+                        phase: Some(ph),
+                        tokens: Some(t),
+                        ..
+                    } if *ph == i => Some(t.output),
+                    _ => None,
+                })
+                .sum();
+            assert_eq!(out, p.output_tokens, "phase {i} output tokens");
+        }
+        // And nothing is null — the same rule as the facts.
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(!json.contains("null"), "{json}");
+        let back: Events = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.events, ev.events);
+    }
+
+    /// Two things the facts count that no event can carry a place for: a
+    /// record with no timestamp (no phase holds it — last, unplaced, still
+    /// there) and a failure whose call is not in the file (`<unknown>` in the
+    /// facts, no event — there is no call to hang it on). And a spawn's events
+    /// ride beside it, in the tier's order, with no phase at all.
+    #[test]
+    fn unplaceable_events_are_kept_last_and_a_spawns_carry_no_phase() {
+        let (s, ev) = with_events(
+            &[
+                r#"{"type":"assistant","message":{"content":[
+                    {"type":"tool_use","id":"t0","name":"Grep"}]}}"#,
+                r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                    "content":"go"}}"#,
+                r#"{"type":"assistant","timestamp":"2026-08-20T10:00:05.000Z","message":{
+                    "content":[{"type":"tool_use","id":"t1","name":"Agent",
+                                "input":{"subagent_type":"Explore"}}]}}"#,
+                r#"{"type":"user","timestamp":"2026-08-20T10:00:30.000Z","toolUseResult":{"agentId":"a1"},
+                    "message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]}}"#,
+                r#"{"type":"user","timestamp":"2026-08-20T10:00:40.000Z","message":{"content":[
+                    {"type":"tool_result","tool_use_id":"gone","is_error":true}]}}"#,
+            ],
+            &[subagent(
+                "a1",
+                &[
+                    r#"{"type":"assistant","timestamp":"2026-08-20T10:00:10.000Z","message":{
+                        "usage":{"output_tokens":9},
+                        "content":[{"type":"tool_use","id":"s1","name":"Read"}]}}"#,
+                    r#"{"type":"user","timestamp":"2026-08-20T10:00:12.000Z","message":{"content":[
+                        {"type":"tool_result","tool_use_id":"s1","content":"hi"}]}}"#,
+                ],
+            )],
+        );
+
+        let n = ev.events.len();
+        assert!(matches!(
+            ev.events[n - 2],
+            Ev::Turn {
+                at: None,
+                phase: None,
+                tools: 1,
+                ..
+            }
+        ));
+        assert!(
+            matches!(&ev.events[n - 1], Ev::Tool { tool, at: None, phase: None, .. } if tool == "Grep")
+        );
+        assert_eq!(tools(&ev).len() as u32, s.total_tool_calls());
+
+        assert_eq!(s.tool_failures["<unknown>"], 1, "the facts count it");
+        assert!(
+            !tools(&ev)
+                .iter()
+                .any(|e| matches!(e, Ev::Tool { failed: true, .. })),
+            "but no call exists to carry it"
+        );
+
+        assert_eq!(ev.spawns.len(), 1);
+        assert_eq!(ev.spawns[0].agent_id.as_deref(), Some("a1"));
+        assert_eq!(ev.spawns[0].events.len(), 2);
+        assert!(ev.spawns[0].events.iter().all(|e| matches!(
+            e,
+            Ev::Turn { phase: None, .. } | Ev::Tool { phase: None, .. }
+        )));
+        assert!(matches!(
+            &ev.spawns[0].events[1],
+            Ev::Tool { tool, result_bytes: Some(2), .. } if tool == "Read"
+        ));
+    }
+
+    /// The change picture per call follows the facts' rules exactly: files
+    /// without a diff are named and the lines stay unknown (opaque); a refused
+    /// edit is a known zero, not an unknown.
+    #[test]
+    fn a_calls_change_picture_carries_the_same_two_states_as_the_facts() {
+        let named = r#"{\"applied\":true,\"files\":[{\"path\":\"a.rs\"}]}"#;
+        let (s, ev) = with_events(
+            &[
+                r#"{"type":"assistant","timestamp":"2026-08-20T10:00:00.000Z","message":{"content":[
+                    {"type":"tool_use","id":"t1","name":"mcp__kaed-kai__edit"}]}}"#,
+                &format!(
+                    r#"{{"type":"user","timestamp":"2026-08-20T10:00:01.000Z","toolUseResult":"{named}",
+                    "message":{{"content":[{{"type":"tool_result","tool_use_id":"t1"}}]}}}}"#
+                ),
+                r#"{"type":"assistant","timestamp":"2026-08-20T10:00:02.000Z","message":{"content":[
+                    {"type":"tool_use","id":"t2","name":"mcp__kaed-kai__edit"}]}}"#,
+                r#"{"type":"user","timestamp":"2026-08-20T10:00:03.000Z","toolUseResult":"{\"applied\":false}",
+                    "message":{"content":[{"type":"tool_result","tool_use_id":"t2"}]}}"#,
+            ],
+            &[],
+        );
+        let calls = tools(&ev);
+        assert!(matches!(
+            calls[0],
+            Ev::Tool { files, lines_added: None, lines_deleted: None, opaque: true, .. }
+                if files == &["a.rs"]
+        ));
+        assert!(matches!(
+            calls[1],
+            Ev::Tool { files, lines_added: Some(0), lines_deleted: Some(0), opaque: false, .. }
+                if files.is_empty()
+        ));
+        assert_eq!(s.changes.opaque_edits, 1);
+        assert_eq!(s.changes.files_touched, 1);
     }
 }

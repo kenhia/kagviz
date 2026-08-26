@@ -1,0 +1,1054 @@
+{
+  "session_id": "fixture-0001",
+  "project": "-home-ken-src-example",
+  "cwd": "/home/ken/src/example",
+  "git_branch": "009-example",
+  "cli_versions": [
+    "2.1.230",
+    "2.1.240"
+  ],
+  "models": {
+    "claude-opus-5": 16
+  },
+  "started": "2026-08-20T10:00:00Z",
+  "ended": "2026-08-20T12:13:00Z",
+  "wall_secs": 7980,
+  "active_secs": 510,
+  "idle_secs": 7470,
+  "records": 39,
+  "skipped_lines": 0,
+  "assistant_turns": 16,
+  "user_prompts": 4,
+  "pasted_attachments": 1,
+  "ask_user_questions": 1,
+  "skills": [
+    "commit"
+  ],
+  "subagents": [
+    "Explore",
+    "Plan"
+  ],
+  "subagent_transcripts": 1,
+  "tool_calls": {
+    "Agent": 2,
+    "AskUserQuestion": 1,
+    "Bash": 4,
+    "Edit": 1,
+    "Grep": 1,
+    "Read": 2,
+    "Skill": 1,
+    "Write": 1,
+    "mcp__kaed-kai__edit": 2,
+    "mcp__korg__update_work_item": 1
+  },
+  "tool_failures": {
+    "<unknown>": 1,
+    "Bash": 1
+  },
+  "tokens": {
+    "input": 47900,
+    "output": 2048,
+    "thinking": 480,
+    "cache_read": 116400,
+    "cache_write": 11000
+  },
+  "changes": {
+    "files_touched": 4,
+    "lines_added": 9,
+    "lines_deleted": 2,
+    "opaque_edits": 5,
+    "by_tool": {
+      "Bash": {
+        "calls": 4,
+        "files_touched": 0,
+        "lines_added": 0,
+        "lines_deleted": 0,
+        "opaque": 4
+      },
+      "Edit": {
+        "calls": 1,
+        "files_touched": 1,
+        "lines_added": 2,
+        "lines_deleted": 1,
+        "opaque": 0
+      },
+      "Write": {
+        "calls": 1,
+        "files_touched": 1,
+        "lines_added": 5,
+        "lines_deleted": 0,
+        "opaque": 0
+      },
+      "mcp__kaed-kai__edit": {
+        "calls": 2,
+        "files_touched": 2,
+        "lines_added": 2,
+        "lines_deleted": 1,
+        "opaque": 1
+      }
+    }
+  },
+  "activity": {
+    "bucket_secs": 5,
+    "spans": [
+      {
+        "started": "2026-08-20T10:00:00Z",
+        "ended": "2026-08-20T10:05:30Z",
+        "secs": 330,
+        "idle_before_secs": 0,
+        "buckets": [
+          {
+            "records": 2,
+            "tool_calls": 1,
+            "tool_failures": 0,
+            "user_turns": 1,
+            "output_tokens": 80
+          },
+          {
+            "records": 1,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 3,
+            "tool_calls": 2,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 120
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 2,
+            "tool_calls": 1,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 400
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 1,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 1,
+            "output_tokens": 0
+          },
+          {
+            "records": 2,
+            "tool_calls": 1,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 250
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 1,
+            "tool_calls": 1,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 60
+          },
+          {
+            "records": 1,
+            "tool_calls": 0,
+            "tool_failures": 1,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 1,
+            "tool_calls": 1,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 140
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 1,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 2,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 1,
+            "output_tokens": 0
+          },
+          {
+            "records": 1,
+            "tool_calls": 2,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 90
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 1,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          }
+        ]
+      },
+      {
+        "started": "2026-08-20T12:10:00Z",
+        "ended": "2026-08-20T12:13:00Z",
+        "secs": 180,
+        "idle_before_secs": 7470,
+        "buckets": [
+          {
+            "records": 2,
+            "tool_calls": 1,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 300
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 1,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 2,
+            "tool_calls": 1,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 110
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 2,
+            "tool_calls": 1,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 180
+          },
+          {
+            "records": 2,
+            "tool_calls": 1,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 90
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 2,
+            "tool_calls": 1,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 70
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 1,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 1,
+            "output_tokens": 0
+          },
+          {
+            "records": 1,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 60
+          },
+          {
+            "records": 1,
+            "tool_calls": 1,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 45
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 1,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 3,
+            "tool_calls": 1,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 33
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 1,
+            "tool_calls": 0,
+            "tool_failures": 1,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 0,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 0
+          },
+          {
+            "records": 1,
+            "tool_calls": 0,
+            "tool_failures": 0,
+            "user_turns": 0,
+            "output_tokens": 20
+          }
+        ]
+      }
+    ]
+  },
+  "phases": [
+    {
+      "started": "2026-08-20T10:00:00Z",
+      "ended": "2026-08-20T10:02:30Z",
+      "secs": 150,
+      "span": 0,
+      "kind": "implementing",
+      "records": 8,
+      "tool_calls": 4,
+      "tool_failures": 0,
+      "output_tokens": 600,
+      "mix": {
+        "read": 2,
+        "edit": 1,
+        "run": 1,
+        "org": 0,
+        "ask": 0,
+        "delegate": 0,
+        "other": 0
+      },
+      "opened_by": "add a --dry-run flag to the sync script"
+    },
+    {
+      "started": "2026-08-20T10:02:30Z",
+      "ended": "2026-08-20T10:05:00Z",
+      "secs": 150,
+      "span": 0,
+      "kind": "implementing",
+      "records": 7,
+      "tool_calls": 3,
+      "tool_failures": 1,
+      "output_tokens": 450,
+      "mix": {
+        "read": 0,
+        "edit": 1,
+        "run": 1,
+        "org": 0,
+        "ask": 1,
+        "delegate": 0,
+        "other": 0
+      },
+      "opened_by": "also write a test for it"
+    },
+    {
+      "started": "2026-08-20T10:05:00Z",
+      "ended": "2026-08-20T10:05:30Z",
+      "secs": 30,
+      "span": 0,
+      "kind": "delegating",
+      "records": 4,
+      "tool_calls": 2,
+      "tool_failures": 0,
+      "output_tokens": 90,
+      "mix": {
+        "read": 0,
+        "edit": 0,
+        "run": 1,
+        "org": 0,
+        "ask": 0,
+        "delegate": 1,
+        "other": 0
+      },
+      "opened_by": "/commit wip"
+    },
+    {
+      "started": "2026-08-20T12:10:00Z",
+      "ended": "2026-08-20T12:12:00Z",
+      "secs": 120,
+      "span": 1,
+      "kind": "delegating",
+      "records": 11,
+      "tool_calls": 5,
+      "tool_failures": 0,
+      "output_tokens": 750,
+      "mix": {
+        "read": 0,
+        "edit": 2,
+        "run": 0,
+        "org": 1,
+        "ask": 0,
+        "delegate": 2,
+        "other": 0
+      }
+    },
+    {
+      "started": "2026-08-20T12:12:00Z",
+      "ended": "2026-08-20T12:13:00Z",
+      "secs": 60,
+      "span": 1,
+      "kind": "exploring",
+      "records": 9,
+      "tool_calls": 2,
+      "tool_failures": 1,
+      "output_tokens": 158,
+      "mix": {
+        "read": 1,
+        "edit": 0,
+        "run": 1,
+        "org": 0,
+        "ask": 0,
+        "delegate": 0,
+        "other": 0
+      },
+      "opened_by": "here's the screenshot of the failing run"
+    }
+  ],
+  "user_involvement": [
+    {
+      "kind": "prompt",
+      "at": "2026-08-20T10:00:00Z",
+      "preview": "add a --dry-run flag to the sync script",
+      "truncated": false,
+      "attachments": 0
+    },
+    {
+      "kind": "prompt",
+      "at": "2026-08-20T10:02:30Z",
+      "preview": "also write a test for it",
+      "truncated": false,
+      "attachments": 0
+    },
+    {
+      "kind": "question",
+      "at": "2026-08-20T10:03:10Z",
+      "header": "Flag",
+      "question": "Keep the flag name --dry-run or use -n?",
+      "options": [
+        "--dry-run",
+        "-n"
+      ],
+      "chosen": "--dry-run"
+    },
+    {
+      "kind": "prompt",
+      "at": "2026-08-20T10:05:00Z",
+      "preview": "/commit wip",
+      "truncated": false,
+      "attachments": 0
+    },
+    {
+      "kind": "prompt",
+      "at": "2026-08-20T12:12:00Z",
+      "preview": "here's the screenshot of the failing run",
+      "truncated": false,
+      "attachments": 1
+    }
+  ],
+  "delegation": {
+    "spawns": [
+      {
+        "agent_id": "ex01",
+        "subagent_type": "Explore",
+        "description": "Find other scripts with flags",
+        "model": "claude-sonnet-5",
+        "sidecar": true,
+        "started": "2026-08-20T12:10:05Z",
+        "ended": "2026-08-20T12:10:20Z",
+        "active_secs": 15,
+        "records": 5,
+        "skipped_lines": 0,
+        "assistant_turns": 3,
+        "tool_calls": {
+          "Glob": 1,
+          "Grep": 1,
+          "Read": 1
+        },
+        "tool_failures": {
+          "Grep": 1
+        },
+        "tokens": {
+          "input": 7500,
+          "output": 2100,
+          "thinking": 250,
+          "cache_read": 3000,
+          "cache_write": 1500
+        },
+        "changes": {
+          "files_touched": 0,
+          "lines_added": 0,
+          "lines_deleted": 0,
+          "opaque_edits": 0,
+          "by_tool": {}
+        }
+      }
+    ],
+    "unjoined_spawns": 1,
+    "inline_records": 0,
+    "totals": {
+      "records": 5,
+      "assistant_turns": 3,
+      "tool_calls": {
+        "Glob": 1,
+        "Grep": 1,
+        "Read": 1
+      },
+      "tool_failures": {
+        "Grep": 1
+      },
+      "tokens": {
+        "input": 7500,
+        "output": 2100,
+        "thinking": 250,
+        "cache_read": 3000,
+        "cache_write": 1500
+      },
+      "changes": {
+        "files_touched": 0,
+        "lines_added": 0,
+        "lines_deleted": 0,
+        "opaque_edits": 0,
+        "by_tool": {}
+      }
+    }
+  }
+}

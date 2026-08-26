@@ -86,7 +86,15 @@ just fmt
 ```
 
 `just check` is the real gate — run it before shipping, not just `cargo test`.
-Clippy runs with `-D warnings` over test targets too.
+Clippy runs with `-D warnings` over test targets too. CI runs the same recipe
+(`.github/workflows/check.yml`).
+
+`tests/golden.rs` runs the built binary over the hand-written fixture under
+`tests/fixtures/` and compares every output — facts, events, report, the
+`sessions` table, the terminal `show` — byte for byte with `tests/golden/`.
+When a change moves one on purpose, `KAGVIZ_UPDATE_GOLDEN=1 cargo test
+--test golden` rewrites them; **read the resulting diff** — it is the review
+surface for any change to a document or the page.
 
 ### Read these first
 
@@ -94,7 +102,9 @@ Clippy runs with `-D warnings` over test targets too.
   before touching the extractor.** It is field-derived, not documented
   upstream, and the format drifts between CLI releases.
 - `docs/facts-contract.md` — the JSON `show --json` emits, and the rules for
-  changing it. **Read this before adding or renaming a field.**
+  changing it — plus the two documents under the same rules, `sessions.json`
+  and the events document (`show --events`). **Read this before adding or
+  renaming a field.**
 - `src/transcript.rs` — tolerant record model. Parsing must never reject an
   unknown record type or field.
 - `src/summary.rs` — the deterministic pass.
@@ -134,11 +144,18 @@ Clippy runs with `-D warnings` over test targets too.
 - Validate extractor changes against **real transcripts** under
   `~/.claude/projects`, not only the unit tests. Every trap documented so far
   was found that way.
-- **Adding a facts field touches up to six places** — walk the list, because
+- **Both tiers and the events count through one `Counter`.** `Counter::count`
+  is the only place a per-record quantity is read — the session, every spawn
+  and the events document all come out of it, so they cannot disagree. A
+  quantity counted in `summarize` alone reaches neither the delegated tier
+  nor the events; if it is a count, put it in the `Counter`.
+- **Adding a facts field touches up to seven places** — walk the list, because
   the missable one is different every time: (1) `Summary` + the `summarize`
-  loop; (2) `summarize_spawn`, if the delegated tier should carry it too —
-  a quantity in one tier and not the other makes them silently
-  non-comparable; (3) `docs/facts-contract.md`, always; (4) the report in
-  `render.rs`; (5) the *terminal* view in `main.rs::show_session`, the third
-  presentation layer and the one that gets forgotten; (6) the corpus sweep,
-  to prove the change additive (or to measure it, if it is not).
+  loop, or the `Counter` if it is a per-record count; (2) `Spawn`, if the
+  delegated tier should carry it too — a quantity in one tier and not the
+  other makes them silently non-comparable; (3) `docs/facts-contract.md`,
+  always; (4) the report in `render.rs`; (5) the *terminal* view in
+  `main.rs::show_session`, the third presentation layer and the one that
+  gets forgotten; (6) the goldens under `tests/golden/`, regenerated and
+  read; (7) the corpus sweep, to prove the change additive (or to measure it,
+  if it is not).

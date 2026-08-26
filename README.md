@@ -45,7 +45,10 @@ combined  133 tool call(s), 4 failed, 406,894 out  (session + delegated)
 
 `kagviz show <id> --json` emits the whole facts document. That JSON is the
 contract: renderers consume it, and it is the seam a future interactive
-front-end plugs into.
+front-end plugs into. `kagviz show <id> --events` emits the detail tier under
+it — every turn and tool call, joined to its phase, with sizes, outcomes and
+the files each call changed — as a separate document, so the facts stay light
+and a click on the timeline has something to read.
 
 ## The report
 

@@ -2,8 +2,10 @@
 //!
 //! Renders from [`Summary`] alone — never from the transcript — so the
 //! extractor/renderer seam stays honest and `kagviz show <id> --json` output
-//! is a valid input. Nothing here computes a number; if a value is not already
-//! in the facts, it does not appear on the page.
+//! is a valid input. Nothing here computes a *fact*: the arithmetic below is
+//! presentation — a peak to scale a bar against, a share of a track, a sum
+//! the contract says any consumer may take — and if a value is not already in
+//! the facts, or a sum of values that are, it does not appear on the page.
 //!
 //! Self-contained is a hard requirement, not a preference: no external fonts,
 //! stylesheets, scripts or images, so the file still renders correctly with no
@@ -1186,7 +1188,7 @@ p.combined{margin:.7rem 0 .2rem;padding:.55rem .7rem;background:var(--chip);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::summary::{Summary, summarize};
+    use crate::summary::{Involvement, Summary, summarize};
     use crate::transcript::{Subagent, Transcript};
 
     fn render_lines(lines: &[&str]) -> String {
@@ -1230,13 +1232,12 @@ mod tests {
         assert_eq!(report(&direct), report(&round_tripped));
         // the parts a shallow round trip would lose: the tagged involvement
         // enum, and the activity series it is positioned against
-        let html = report(&round_tripped);
-        assert!(html.contains("chose: Yes"), "answer lost in the round trip");
-        assert!(
-            html.contains("3m idle"),
-            "idle break lost in the round trip"
-        );
+        assert!(matches!(
+            round_tripped.user_involvement.last(),
+            Some(Involvement::Question { chosen: Some(c), .. }) if c == "Yes"
+        ));
         assert_eq!(round_tripped.activity.spans.len(), 2);
+        assert_eq!(round_tripped.activity.spans[1].idle_before_secs, 220);
         assert_eq!(round_tripped.tokens.output, 40);
     }
 
@@ -1281,7 +1282,6 @@ mod tests {
         let direct = summarize(None, &parent, std::slice::from_ref(&spawned));
         let html = report(&direct);
 
-        assert!(html.contains("Delegated work"));
         assert!(html.contains("Map the linking layer"), "what it was for");
         assert!(html.contains("claude-opus-5"), "which model actually ran");
         assert!(
@@ -1291,10 +1291,6 @@ mod tests {
         assert!(
             html.contains("2 more delegated"),
             "the headline must say the tool count is not the whole story"
-        );
-        assert!(
-            html.contains("not</strong> summed"),
-            "overlapping seconds must be called out, not implied"
         );
 
         // And the tier survives the contract seam like everything else.
@@ -1373,7 +1369,6 @@ mod tests {
             html.contains(r#"<span class="n">2 failed</span>"#),
             "no rate when no failure joined a call"
         );
-        assert!(html.contains("could not be joined"));
     }
 
     /// Past a few hundred columns the strip is a wall of 2px bars and no
@@ -1470,7 +1465,6 @@ mod tests {
         ]);
         // Three phases inside a two-second span: one bucket, one band.
         assert!(html.contains("2 phase(s) are shorter than one column"));
-        assert!(html.contains("not the same as their not existing"));
     }
 
     /// The phase durations are the answer to "where did the time go", so
@@ -1498,7 +1492,11 @@ mod tests {
             s.phases.iter().map(|p| p.secs).sum::<i64>(),
             s.activity.spans.iter().map(|sp| sp.secs).sum::<i64>()
         );
-        assert!(report(&s).contains("account for all of it"));
+        // And every one of them is on the page.
+        assert_eq!(
+            report(&s).matches("<li class=\"ph-").count(),
+            s.phases.len()
+        );
     }
 
     #[test]
@@ -1509,16 +1507,6 @@ mod tests {
         ]);
         assert!(html.contains("fix &lt;img onerror=x&gt; &amp; &quot;quotes&quot;"));
         assert!(!html.contains("<img onerror"));
-    }
-
-    #[test]
-    fn an_opaque_edit_is_reported_as_unknown_not_as_zero() {
-        let html = render_lines(&[
-            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:00.000Z","message":{
-                "content":[{"type":"tool_use","id":"t1","name":"Bash"}]}}"#,
-        ]);
-        assert!(html.contains("recoverable diff"));
-        assert!(html.contains("an unknown, not a zero"));
     }
 
     #[test]
@@ -1587,9 +1575,6 @@ mod tests {
         assert!(CSS.contains("container-type:inline-size"));
         assert!(CSS.contains(".band span{display:none"));
         assert!(CSS.contains(&format!("@container (min-width:{BAND_LABEL_MIN_PX}px)")));
-
-        // And the reader is told where the colours are named.
-        assert!(html.contains("Band colours name the phase kind"));
     }
 
     /// A 54-day session must not render its wall clock as `1297h15m` — that
@@ -1660,10 +1645,6 @@ mod tests {
         assert!(
             !html.contains("chip said"),
             "written chip drawn with nothing to say"
-        );
-        assert!(
-            html.contains("nothing here is inferred"),
-            "a page with no model text should still say so"
         );
     }
 
@@ -1750,21 +1731,5 @@ mod tests {
         let s: Summary = serde_json::from_value(json).unwrap();
         assert!(s.labels.is_none());
         report(&s);
-    }
-
-    #[test]
-    fn a_question_shows_what_was_asked_and_chosen() {
-        let html = render_lines(&[
-            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:00.000Z","message":{
-                "content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{
-                    "questions":[{"question":"Which store?","header":"Store",
-                    "options":[{"label":"Postgres"},{"label":"SQLite"}]}]}}]}}"#,
-            r#"{"type":"user","timestamp":"2026-08-20T10:00:20.000Z","message":{"content":[
-                {"type":"tool_result","tool_use_id":"t1"}]},
-                "toolUseResult":{"answers":{"Which store?":"SQLite"}}}"#,
-        ]);
-        assert!(html.contains("Which store?"));
-        assert!(html.contains("chose: SQLite"));
-        assert!(html.contains("Postgres · SQLite"));
     }
 }

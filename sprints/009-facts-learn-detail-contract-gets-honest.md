@@ -204,8 +204,12 @@ is structural or numeric: the class names, the `1 failed · 25.00%`, the
 
 **CI**: `.github/workflows/check.yml` runs `just check` on push to `main`
 and on pull requests — `dtolnay/rust-toolchain@stable` with rustfmt and
-clippy, `Swatinem/rust-cache`, `extractor/setup-just`. It could not be
-exercised from this branch before the push; the first PR is its first run.
+clippy, `Swatinem/rust-cache`, `taiki-e/install-action@just`. It could not
+be exercised from this branch before the push, and the first run on the PR
+failed in three seconds: the `just` installer it was first written with,
+`extractor/setup-just`, does not exist. Fixed in-ship after checking the
+replacement's repository and its `just` manifest through the GitHub API
+rather than guessing a second time.
 
 ## The before/after, and what did not move
 

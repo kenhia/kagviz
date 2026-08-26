@@ -22,5 +22,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - uses: extractor/setup-just@v3
+      # `extractor/setup-just` was the first pin here and does not exist
+      # (the workflow's first run failed to resolve it, 2026-08-25).
+      - uses: taiki-e/install-action@just
       - run: just check

@@ -110,22 +110,36 @@ since day one.
   built binary, and CI running `just check`. Front-end v1 is unblocked. See
   `sprints/009-facts-learn-detail-contract-gets-honest.md`.
 
-## Now
-
-Queued in korg, in this order (2026-08-26). Front-end v1 (#1619) is split in
-two because its halves carry different risks — part 1 is plumbing, part 2 is
-the interaction — and part 1 is useful on its own the day it ships.
+- **Sprint 010 — CI off the deprecated Node 20 runtime.** One pin:
+  `actions/checkout@v4` → `@v7`. The sprint exists as much for the *method* —
+  the CI log is the authoritative list, every `uses:` is pre-flighted through
+  the API rather than from memory, and the proof is the run's own log — which
+  is what the `gha-runtime-bump` skill generalises. See
+  `sprints/010-ci-off-node-20.md`.
 
 - **Sprint 011 — front-end v1, part 1: the skeleton, the contracts in
-  TypeScript, the session browser** (korg:1641; #1636, #1637, #1638). A
-  SvelteKit + Svelte 5 + TypeScript static SPA in `web/` — the homelab
-  convention — hash-routed because copyparty serves files and not SPA
-  fallbacks, served from `derived/app/` on the data's own origin, and gated
-  inside `just check` and CI. The three contracts typed, with a conformance
-  test over the repo's goldens, so the app is the contract's second consumer
-  *in the gate*. The session browser (sortable, filterable, sync status) and
-  a session page carrying the report's panels and a static strip. Deployed.
-  No interaction yet.
+  TypeScript, the session browser.** A SvelteKit + Svelte 5 + TypeScript
+  static SPA in `web/`, hash-routed, served from `derived/app/` on the data's
+  own origin and deployed at `/kagviz/app/index.html`; the browser sorts and
+  filters 407 sessions across three hosts, and a session page carries the
+  report's panels over the same facts document with the time strip drawn once
+  as SVG. The three contracts are typed in `web/src/lib/contract/` with a
+  conformance test over the repo's goldens that runs inside `just check` and
+  CI — the app is now the contract's second consumer *in the gate*, and on its
+  first run it found the events document's per-phase invariant stating one
+  fewer carve-out than it needed (`<unknown>` failures land in a phase and
+  cannot be placed in the events; both consumers now assert the corrected
+  rule). `just check` grew a `web-check` half and CI grew Node. The static
+  report is unchanged. No interaction yet. See
+  `sprints/011-front-end-v1-skeleton.md`.
+
+## Now
+
+Queued in korg (2026-08-26). Front-end v1 (#1619) was split in two because its
+halves carry different risks — part 1 was plumbing, part 2 is the interaction —
+and part 1 shipped useful on its own. Part 2 starts from a deployed app with
+typed data and a conformance test already in the gate.
+
 - **Sprint 012 — front-end v1, part 2: the timeline — forest, tree, leaf**
   (korg:1642; #1591, #1639). Pan and zoom from the whole session down to a
   span, a phase, a turn — re-bucketed from the events document past the

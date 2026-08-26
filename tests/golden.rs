@@ -211,8 +211,8 @@ fn derive_writes_the_same_bytes_show_prints_and_the_index_links_them() {
         .unwrap(),
         events
     );
-    let sessions: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(derived.join("sessions.json")).unwrap()).unwrap();
+    let sessions_json = fs::read_to_string(derived.join("sessions.json")).unwrap();
+    let sessions: serde_json::Value = serde_json::from_str(&sessions_json).unwrap();
     let row = &sessions["sessions"][0];
     assert_eq!(row["host"], "kai");
     assert_eq!(row["session_id"], SESSION);
@@ -223,7 +223,22 @@ fn derive_writes_the_same_bytes_show_prints_and_the_index_links_them() {
             .unwrap()
             .contains("events</a>")
     );
+    check("fixture-0001.sessions.json", &stable_stamp(&sessions_json));
     let _ = fs::remove_dir_all(&live);
+}
+
+/// The one field of `sessions.json` that is not a function of the fixture:
+/// `kagviz` is `<version> (<commit>)`, so it moves on every commit and would
+/// make the golden churn for reasons no reader cares about. Replaced with a
+/// fixed placeholder — the *shape* is what this golden holds, and it is the
+/// bytes the front-end's conformance test decodes.
+fn stable_stamp(json: &str) -> String {
+    let version = format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("KAGVIZ_COMMIT"));
+    assert!(
+        json.contains(&version),
+        "sessions.json no longer stamps `kagviz` as `{version}` — the placeholder is now a lie"
+    );
+    json.replace(&version, "<kagviz>")
 }
 
 /// The two documents are one pass: the events are what the facts counted.
@@ -269,10 +284,32 @@ fn the_events_add_up_to_the_facts() {
         facts["changes"]["lines_added"].as_u64().unwrap()
     );
     // Per phase, and per spawn.
+    //
+    // Failures carry the same `<unknown>` carve-out per phase as the session
+    // does: a failure whose call is not in the file still lands in the phase
+    // its result was recorded in — a phase must not report an unknown as a
+    // zero either — and the events still have no call to hang it on. The
+    // fixture has exactly one, in its last phase.
+    let mut unplaced = 0u64;
     for (i, phase) in facts["phases"].as_array().unwrap().iter().enumerate() {
-        let n = tools.clone().filter(|e| e["phase"] == i as u64).count() as u64;
-        assert_eq!(n, phase["tool_calls"].as_u64().unwrap(), "phase {i}");
+        let of_phase = tools.clone().filter(|e| e["phase"] == i as u64);
+        assert_eq!(
+            of_phase.clone().count() as u64,
+            phase["tool_calls"].as_u64().unwrap(),
+            "phase {i} tool_calls"
+        );
+        let placed = of_phase.filter(|e| e["failed"] == true).count() as u64;
+        let counted = phase["tool_failures"].as_u64().unwrap();
+        assert!(
+            placed <= counted,
+            "phase {i} placed more failures than it counted"
+        );
+        unplaced += counted - placed;
     }
+    assert_eq!(
+        unplaced, unknown,
+        "every unplaced phase failure is an <unknown>"
+    );
     let spawns = facts["delegation"]["spawns"].as_array().unwrap();
     let spawn_events = events["spawns"].as_array().unwrap();
     assert_eq!(spawns.len(), spawn_events.len());

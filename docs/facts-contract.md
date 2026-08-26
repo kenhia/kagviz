@@ -2,7 +2,10 @@
 
 `kagviz show <id> --json` emits one JSON object: everything kagviz was able to
 count about a session. It is the **only** input the renderer takes, and it is
-the seam a future interactive front-end plugs into. Two more documents live
+the seam the front-end plugs into — typed in `web/src/lib/contract/` since
+sprint 011, with a conformance test over `tests/golden/` that runs inside
+`just check`, so a change here that breaks a consumer fails the build on this
+side of the seam. Two more documents live
 under the same rules and are described at the end: `sessions.json`, the index
 a consumer reads *first*, and the [events document](#the-events-document),
 the detail tier it reads *last*.
@@ -493,7 +496,12 @@ consumer can lean on, and that the tests hold:
   `lines_deleted` summed over the events are `changes.lines_added` and
   `lines_deleted`; the distinct `files` are `changes.files_touched`.
 - For every phase `i`, the events with `phase: i` add up to that phase's
-  `tool_calls`, `tool_failures` and `output_tokens`.
+  `tool_calls` and `output_tokens`, and to its `tool_failures` **less the
+  `<unknown>` ones** — the same carve-out as the line above, for the same
+  reason. A failure whose call is not in the file still lands in the phase
+  its result was recorded in, because a phase must not report an unknown as
+  a zero; the events still have no call to hang it on. The fixture has one,
+  and it is why this rule is stated per phase rather than left implied.
 - The same for each `spawns[k]` against `delegation.spawns[k]`.
 
 ```json

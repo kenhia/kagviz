@@ -24,6 +24,7 @@ snapshots with a date and a commit on them — and are untouched by any of this.
         reports/<host>/<session-id>.html   # `kagviz render`
         sessions.json        # the cross-host index — a contract (facts-contract.md)
         index.html           # the page a person picks a session from
+        app/                 # the front-end (sprint 011) — `just web-deploy` puts it here
         state.json           # per session: source digest + the kagviz that derived it
         META.json            # the last run: kagviz version, when, per-host counts
         sync-status.json     # copied from above, so the served tree carries it
@@ -41,7 +42,11 @@ Two rules, both inherited from the pinned store:
   transcript bytes exactly as written, sidecars and `tool-results/` included.
   Nothing under kagviz ever writes there. Anything computed goes under
   `derived/`, stamped with the kagviz that produced it, and is regenerable at
-  will — delete the whole directory and the next `derive` rebuilds it.
+  will — delete the whole directory and the next `derive` rebuilds it. `app/`
+  is the one thing under `derived/` a *run* does not rebuild: it is produced
+  by the build (`just web-deploy`) rather than by `derive`, and `derive` and
+  `index` never write into it. It is still regenerable, from the same
+  checkout, which is what the rule is for.
 
 ## The sync — `collect/sync.sh`
 
@@ -151,8 +156,26 @@ accounts, so tailnet-only *is* the access control. That is the trust boundary
 Ken already accepted for `~/src` on the same viewer (k-homelab manifest,
 `copyparty.dotfiles.ack`); this is the same call, made visibly.
 
-The same path carries the future front-end: a static app reading
-`sessions.json` → facts → (later) events over HTTP needs no backend at all.
+The same path carries the front-end, and since sprint 011 it does:
+**<https://kai.encke-wahoo.ts.net:8027/kagviz/app/index.html>** is the app,
+reading `sessions.json` → facts (→ events, in part 2) over HTTP with no
+backend at all. `just web-deploy` builds `web/` and stages it into
+`derived/app/`; the static `index.html` links it, but only once it is actually
+there — a link to a 404 would leave the reader unable to tell "not deployed"
+from "broken".
+
+Two properties of this mount are load-bearing, and both were learned by
+deploying rather than by reasoning:
+
+- **`/kagviz/app/` is a directory, and copyparty serves a directory as a
+  listing** — the same trap recorded below for `/kagviz/`. So the entry point
+  is `app/index.html`, and every in-app link is a bare `#/…` fragment resolved
+  against the document. `resolve()` from SvelteKit's `$app/paths` produces
+  `/kagviz/app#/…` — the directory — and following one of those leaves the app
+  for a file listing.
+- **The app is mounted, not rooted.** Its asset URLs are rewritten relative at
+  build time (`web/scripts/relativize.js`), so the bundle works wherever the
+  directory is copied and the mount path is not baked into it.
 
 ## Scheduling
 

@@ -85,9 +85,18 @@ just check    # cargo fmt --check + clippy --all-targets -D warnings + test
 just fmt
 ```
 
-`just check` is the real gate — run it before shipping, not just `cargo test`.
-Clippy runs with `-D warnings` over test targets too. CI runs the same recipe
-(`.github/workflows/check.yml`).
+`just check` is the real gate — `rust-check` (fmt, clippy `-D warnings` over
+test targets too, tests) **and** `web-check` (prettier/eslint, svelte-check,
+build, vitest). Run it before shipping, not just `cargo test`. CI runs the same
+recipe (`.github/workflows/check.yml`).
+
+The app's half includes the **contract conformance test**, which decodes the
+checked-in goldens and asserts the invariants `docs/facts-contract.md` states.
+That is the point of it being in this gate rather than a separate one: a facts
+change that breaks the front-end fails the Rust build the day it lands. If you
+move a golden, read the conformance test's failure as carefully as the golden
+diff — the first time it ran it found a defect in the *contract text*, not in
+the code.
 
 `tests/golden.rs` runs the built binary over the hand-written fixture under
 `tests/fixtures/` and compares every output — facts, events, report, the
@@ -111,6 +120,9 @@ surface for any change to a document or the page.
 - `docs/collection.md` — the live mirror under `/ai-data/kagviz-data/live`,
   the nightly `derive`, and what is served. **Read this before touching
   `collect/` or `src/derive.rs`.**
+- `web/README.md` — the app: why the router is hash-based, why the bundle
+  lives under `derived/`, and the two traps that only show up on deploy.
+  **Read this before touching `web/`.**
 - `sprints/planning/roadmap.md` — what is planned and why.
 
 ### Conventions that are easy to get wrong
@@ -134,7 +146,12 @@ surface for any change to a document or the page.
 - **The renderer reads the facts, never the transcript.** If you find yourself
   wanting a value the facts do not carry, add it to the facts. The index
   (`sessions.json`, `index.html`) reads the facts files the same way — and is
-  its own contract, documented beside the facts.
+  its own contract, documented beside the facts. So does the app in `web/`,
+  which is now a **third** consumer of the same documents: a rule the report
+  follows (written text marked, unknowns visibly absent, no quantity the
+  contract does not let a consumer recompute) has to hold there too, and where
+  the report already solved a display problem — the strip's break densities are
+  the worked example — port the solution rather than rediscovering it.
 - **Nothing writes into `live/<host>/projects/`.** The mirrors are verbatim;
   everything computed goes under `derived/`, stamped with the kagviz that made
   it, and is regenerable. A sync never propagates a deletion.
@@ -149,7 +166,7 @@ surface for any change to a document or the page.
   and the events document all come out of it, so they cannot disagree. A
   quantity counted in `summarize` alone reaches neither the delegated tier
   nor the events; if it is a count, put it in the `Counter`.
-- **Adding a facts field touches up to seven places** — walk the list, because
+- **Adding a facts field touches up to eight places** — walk the list, because
   the missable one is different every time: (1) `Summary` + the `summarize`
   loop, or the `Counter` if it is a per-record count; (2) `Spawn`, if the
   delegated tier should carry it too — a quantity in one tier and not the
@@ -157,5 +174,8 @@ surface for any change to a document or the page.
   always; (4) the report in `render.rs`; (5) the *terminal* view in
   `main.rs::show_session`, the third presentation layer and the one that
   gets forgotten; (6) the goldens under `tests/golden/`, regenerated and
-  read; (7) the corpus sweep, to prove the change additive (or to measure it,
-  if it is not).
+  read; (7) `web/src/lib/contract/` — the type, the decoder, and the panel
+  that shows it, since sprint 011 (the conformance test will not fail for a
+  field the app merely ignores, which is exactly right and is also why this
+  one is easy to skip); (8) the corpus sweep, to prove the change additive
+  (or to measure it, if it is not).

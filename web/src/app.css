@@ -1,0 +1,285 @@
+/*
+ * The report's palette, verbatim from `src/render.rs`'s CSS, so the app and
+ * the static page read as one system. The report stays; this does not replace
+ * it. Where a token is added here rather than copied it is marked.
+ */
+:root {
+	--bg: #faf9f7;
+	--panel: #fff;
+	--ink: #1b1a18;
+	--muted: #6d6a63;
+	--line: #e4e0d9;
+	--accent: #35618f;
+	--bar: #7ea3c9;
+	--fail: #b8412f;
+	--add: #2f7d4f;
+	--del: #b8412f;
+	--user: #4a7c4e;
+	--ask: #a06a1f;
+	--warnbg: #fdf3e6;
+	--chip: #efece6;
+	--ph-ink: #fff;
+	--ph-exploring: #6b93bd;
+	--ph-implementing: #3f8760;
+	--ph-running: #7a6fa6;
+	--ph-filing: #a06a1f;
+	--ph-delegating: #3d8b93;
+	--ph-discussing: #8c887f;
+	--ph-mixed: #a8a299;
+	--said: #7a4fa0;
+	--saidbg: #f3edf8;
+	/* App-only: a row the pointer is over, and the sticky table header. */
+	--hover: #f2efe9;
+	--sticky: #faf9f7;
+}
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #16181a;
+		--panel: #1e2124;
+		--ink: #e6e3dd;
+		--muted: #9a958c;
+		--line: #2f3439;
+		--accent: #7fb0e0;
+		--bar: #5b87b5;
+		--fail: #e07a63;
+		--add: #68b884;
+		--del: #e07a63;
+		--user: #7cb87f;
+		--ask: #d9a34e;
+		--warnbg: #2c2519;
+		--chip: #2a2e33;
+		--ph-ink: #12161a;
+		--ph-exploring: #7fa9d1;
+		--ph-implementing: #63b189;
+		--ph-running: #9d92c9;
+		--ph-filing: #d9a34e;
+		--ph-delegating: #5fb0b8;
+		--ph-discussing: #9a958c;
+		--ph-mixed: #807b73;
+		--said: #b998d8;
+		--saidbg: #2a2334;
+		--hover: #23272b;
+		--sticky: #16181a;
+	}
+}
+
+* {
+	box-sizing: border-box;
+}
+body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--ink);
+	font:
+		15px/1.5 ui-sans-serif,
+		system-ui,
+		-apple-system,
+		'Segoe UI',
+		Roboto,
+		Helvetica,
+		Arial,
+		sans-serif;
+}
+main {
+	max-width: 1480px;
+	margin: 0 auto;
+	padding: 20px 20px 64px;
+}
+a {
+	color: var(--accent);
+}
+h1 {
+	font-size: 24px;
+	margin: 0 0 12px;
+	letter-spacing: -0.01em;
+}
+h2 {
+	font-size: 12px;
+	text-transform: uppercase;
+	letter-spacing: 0.09em;
+	color: var(--muted);
+	margin: 0 0 12px;
+	font-weight: 600;
+}
+.card {
+	background: var(--panel);
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	padding: 16px 18px;
+	margin-bottom: 16px;
+}
+.cols {
+	display: grid;
+	gap: 16px;
+	align-items: start;
+	grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+.cols > * {
+	min-width: 0;
+}
+.cols .card {
+	margin-bottom: 16px;
+}
+@media (min-width: 1180px) {
+	.cols {
+		grid-template-columns: 2fr 1fr 1fr;
+	}
+}
+.stats {
+	display: flex;
+	gap: 16px;
+	flex-wrap: wrap;
+	margin-bottom: 16px;
+}
+.stat {
+	flex: 1 1 140px;
+	background: var(--panel);
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	padding: 12px 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.stat .k {
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--muted);
+}
+.stat .v {
+	font-size: 26px;
+	font-weight: 600;
+	letter-spacing: -0.02em;
+}
+.stat .n {
+	font-size: 12px;
+	color: var(--muted);
+}
+.note {
+	font-size: 12.5px;
+	color: var(--muted);
+	margin: 0 0 10px;
+}
+.note.unknown {
+	border-left: 3px solid var(--ask);
+	padding-left: 9px;
+	margin-top: 10px;
+}
+.warn {
+	background: var(--warnbg);
+	border: 1px solid var(--ask);
+	border-radius: 8px;
+	padding: 10px 14px;
+	font-size: 13px;
+	margin: 0 0 16px;
+}
+.big {
+	font-size: 22px;
+	font-weight: 600;
+	margin: 0;
+}
+.add {
+	color: var(--add);
+}
+.del {
+	color: var(--del);
+}
+.mono {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+dl.meta {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 2px 14px;
+	margin: 0;
+	font-size: 13px;
+}
+dl.meta dt {
+	color: var(--muted);
+}
+dl.meta dd {
+	margin: 0;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	overflow-wrap: anywhere;
+}
+
+/* Model-written text: a rule down the side, a serif face nothing else uses,
+   and its own accent — so the one thing here that was written rather than
+   counted can never be read as one of the counts. */
+.written {
+	border-left: 3px solid var(--said);
+	padding: 1px 0 1px 16px;
+	margin: 0 0 18px;
+	max-width: 96ch;
+}
+.written .said {
+	font:
+		italic 21px/1.4 ui-serif,
+		Georgia,
+		'Times New Roman',
+		serif;
+	margin: 0 0 5px;
+	color: var(--ink);
+	letter-spacing: -0.01em;
+}
+.written .by {
+	font-size: 11.5px;
+	color: var(--muted);
+	margin: 0;
+}
+.written .by .mark {
+	font-style: italic;
+	font-weight: 600;
+	color: var(--said);
+}
+.chip {
+	display: inline-block;
+	background: var(--chip);
+	border-radius: 999px;
+	padding: 1px 8px;
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--muted);
+	white-space: nowrap;
+}
+.chip.said {
+	background: var(--saidbg);
+	color: var(--said);
+	border: 0;
+	font-style: italic;
+	text-transform: none;
+	letter-spacing: 0;
+	vertical-align: baseline;
+}
+.kindchip {
+	display: inline-block;
+	border-radius: 4px;
+	padding: 0 6px;
+	font-size: 11px;
+	line-height: 18px;
+	color: var(--ph-ink);
+	white-space: nowrap;
+}
+.k-exploring {
+	background: var(--ph-exploring);
+}
+.k-implementing {
+	background: var(--ph-implementing);
+}
+.k-running {
+	background: var(--ph-running);
+}
+.k-filing {
+	background: var(--ph-filing);
+}
+.k-delegating {
+	background: var(--ph-delegating);
+}
+.k-discussing {
+	background: var(--ph-discussing);
+}
+.k-mixed {
+	background: var(--ph-mixed);
+}

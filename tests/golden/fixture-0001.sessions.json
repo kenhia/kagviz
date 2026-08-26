@@ -1,0 +1,40 @@
+{
+  "sessions": [
+    {
+      "host": "kai",
+      "session_id": "fixture-0001",
+      "project": "-home-ken-src-example",
+      "cwd": "/home/ken/src/example",
+      "git_branch": "009-example",
+      "started": "2026-08-20T10:00:00Z",
+      "ended": "2026-08-20T12:13:00Z",
+      "wall_secs": 7980,
+      "active_secs": 510,
+      "user_prompts": 4,
+      "assistant_turns": 16,
+      "tool_calls": 16,
+      "tool_failures": 2,
+      "files_touched": 4,
+      "lines_added": 9,
+      "lines_deleted": 2,
+      "opaque_edits": 5,
+      "output_tokens": 2048,
+      "phases": 5,
+      "delegated_spawns": 1,
+      "skipped_lines": 0,
+      "models": [
+        "claude-opus-5"
+      ],
+      "cli_versions": [
+        "2.1.230",
+        "2.1.240"
+      ],
+      "opened_by": "add a --dry-run flag to the sync script",
+      "facts": "facts/kai/fixture-0001.json",
+      "report": "reports/kai/fixture-0001.html",
+      "events": "events/kai/fixture-0001.json",
+      "source_digest": "sha256:04abb69f1045b0eeebf517f2fcee95c179fecf58dd0ba0d300d397e3a3ea35d6",
+      "kagviz": "<kagviz>"
+    }
+  ]
+}

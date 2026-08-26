@@ -62,8 +62,8 @@ tool mix and failures, file changes, where time went, where the user was
 involved. The audience is the person who asked for the work, not someone
 debugging the agent.
 
-Early-stage: the deterministic core works, the HTML report does not exist yet.
-Roadmap in `sprints/planning/roadmap.md`.
+Early-stage: the deterministic core works and `kagviz render` emits a
+self-contained HTML report. Roadmap in `sprints/planning/roadmap.md`.
 
 ### The rule that governs the design
 
@@ -85,32 +85,97 @@ just check    # cargo fmt --check + clippy --all-targets -D warnings + test
 just fmt
 ```
 
-`just check` is the real gate — run it before shipping, not just `cargo test`.
-Clippy runs with `-D warnings` over test targets too.
+`just check` is the real gate — `rust-check` (fmt, clippy `-D warnings` over
+test targets too, tests) **and** `web-check` (prettier/eslint, svelte-check,
+build, vitest). Run it before shipping, not just `cargo test`. CI runs the same
+recipe (`.github/workflows/check.yml`).
+
+The app's half includes the **contract conformance test**, which decodes the
+checked-in goldens and asserts the invariants `docs/facts-contract.md` states.
+That is the point of it being in this gate rather than a separate one: a facts
+change that breaks the front-end fails the Rust build the day it lands. If you
+move a golden, read the conformance test's failure as carefully as the golden
+diff — the first time it ran it found a defect in the *contract text*, not in
+the code.
+
+`tests/golden.rs` runs the built binary over the hand-written fixture under
+`tests/fixtures/` and compares every output — facts, events, report, the
+`sessions` table, the terminal `show` — byte for byte with `tests/golden/`.
+When a change moves one on purpose, `KAGVIZ_UPDATE_GOLDEN=1 cargo test
+--test golden` rewrites them; **read the resulting diff** — it is the review
+surface for any change to a document or the page.
 
 ### Read these first
 
 - `docs/transcript-format.md` — the on-disk format and its traps. **Read this
   before touching the extractor.** It is field-derived, not documented
   upstream, and the format drifts between CLI releases.
+- `docs/facts-contract.md` — the JSON `show --json` emits, and the rules for
+  changing it — plus the two documents under the same rules, `sessions.json`
+  and the events document (`show --events`). **Read this before adding or
+  renaming a field.**
 - `src/transcript.rs` — tolerant record model. Parsing must never reject an
   unknown record type or field.
 - `src/summary.rs` — the deterministic pass.
+- `docs/collection.md` — the live mirror under `/ai-data/kagviz-data/live`,
+  the nightly `derive`, and what is served. **Read this before touching
+  `collect/` or `src/derive.rs`.**
+- `web/README.md` — the app: why the router is hash-based, why the bundle
+  lives under `derived/`, and the two traps that only show up on deploy.
+  **Read this before touching `web/`.**
 - `sprints/planning/roadmap.md` — what is planned and why.
 
 ### Conventions that are easy to get wrong
 
 - **`promptId` does not mark a user prompt.** It groups every record in a turn,
-  tool results and harness-injected text included. Use `is_user_turn`, and see
-  `INJECTED_PREFIXES`. This one has already been got wrong twice.
+  tool results and harness-injected text included. Use `is_user_turn`. This one
+  has now been got wrong three times, so read `docs/transcript-format.md` traps
+  1 and 5 before touching it — not `INJECTED_PREFIXES` alone, which is only the
+  narrow half. The load-bearing half is **`isMeta`**: the harness flags what it
+  wrote, and that beats matching the shape of it. `<command-*>` is emphatically
+  **not** on the prefix list — it is structure, and `command_line` reads the
+  user's typed line back out of it.
 - **Never report an unknown as a zero.** Shell-based edits leave no recoverable
   diff; they are counted as `opaque_edits`, not folded into the line deltas. A
   number kagviz cannot see must be visibly absent, not silently zero.
 - **Report active time alongside wall time.** Either alone misleads — resumed
   sessions span days and hold minutes of work.
+- **`null` is not `default`.** `#[serde(default)]` covers an absent field, not
+  a present `null` — and a rejected field takes the whole record with it. Any
+  typed non-`Option` field needs `deserialize_with = "null_as_default"`.
+- **The renderer reads the facts, never the transcript.** If you find yourself
+  wanting a value the facts do not carry, add it to the facts. The index
+  (`sessions.json`, `index.html`) reads the facts files the same way — and is
+  its own contract, documented beside the facts. So does the app in `web/`,
+  which is now a **third** consumer of the same documents: a rule the report
+  follows (written text marked, unknowns visibly absent, no quantity the
+  contract does not let a consumer recompute) has to hold there too, and where
+  the report already solved a display problem — the strip's break densities are
+  the worked example — port the solution rather than rediscovering it.
+- **Nothing writes into `live/<host>/projects/`.** The mirrors are verbatim;
+  everything computed goes under `derived/`, stamped with the kagviz that made
+  it, and is regenerable. A sync never propagates a deletion.
 - When adding a field parsed for future use, annotate it and say what will read
   it. Use `#[expect(dead_code)]` where nothing reads it yet, `#[allow(...)]`
   where only tests do (an `expect` would be unfulfilled under `--all-targets`).
 - Validate extractor changes against **real transcripts** under
   `~/.claude/projects`, not only the unit tests. Every trap documented so far
   was found that way.
+- **Both tiers and the events count through one `Counter`.** `Counter::count`
+  is the only place a per-record quantity is read — the session, every spawn
+  and the events document all come out of it, so they cannot disagree. A
+  quantity counted in `summarize` alone reaches neither the delegated tier
+  nor the events; if it is a count, put it in the `Counter`.
+- **Adding a facts field touches up to eight places** — walk the list, because
+  the missable one is different every time: (1) `Summary` + the `summarize`
+  loop, or the `Counter` if it is a per-record count; (2) `Spawn`, if the
+  delegated tier should carry it too — a quantity in one tier and not the
+  other makes them silently non-comparable; (3) `docs/facts-contract.md`,
+  always; (4) the report in `render.rs`; (5) the *terminal* view in
+  `main.rs::show_session`, the third presentation layer and the one that
+  gets forgotten; (6) the goldens under `tests/golden/`, regenerated and
+  read; (7) `web/src/lib/contract/` — the type, the decoder, and the panel
+  that shows it, since sprint 011 (the conformance test will not fail for a
+  field the app merely ignores, which is exactly right and is also why this
+  one is easy to skip); (8) the corpus sweep, to prove the change additive
+  (or to measure it, if it is not).

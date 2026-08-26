@@ -47,6 +47,26 @@ does the rewrite as `postbuild`, and **throws** if it finds nothing to rewrite
 or anything left absolute — a kit release that changes this output fails the
 build rather than shipping a page that cannot start.
 
+## The host is replaceable, and that is deliberate
+
+copyparty is a stop-gap. Nothing here depends on it: every mention of it in
+this tree is a comment or a doc, and the app finds its data by resolving `../`
+against `document.baseURI` — so it works under any HTTP mount, at any depth,
+with no base path configured anywhere. Verified 2026-08-26 by serving the
+deployed tree three directories deeper than production and driving it: 413
+sessions, session page, zero errors.
+
+**The rule that keeps it that way: the app must never need anything a dumb
+static file server cannot do.** No SPA fallback (hence hash routing), no
+rewrites, no directory-index behaviour, no range requests, no server-side
+anything. Every document it reads is a file `kagviz derive` already wrote.
+
+The floor is _a_ static HTTP server, though — not `file://`. The shell boots
+through ES module `import()` and browsers refuse those on `file://`.
+
+Moving hosts is therefore a copy and a URL, and that option is worth more than
+any single host is. Do not spend it.
+
 ## The conformance test
 
 `src/lib/contract/conformance.spec.ts` reads `../tests/golden/fixture-0001.{facts,events,sessions}.json`

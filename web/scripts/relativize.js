@@ -12,8 +12,12 @@
  * Hash routing is exactly the condition that makes the fix safe: the document
  * is always `index.html` at the deployment root and its URL never changes as
  * you navigate, so `./_app/…` is correct wherever the directory is copied. The
- * app then works at `/kagviz/app/`, under `npm run preview`, and from a plain
- * `file://` open, with nothing baked in about the mount point.
+ * app then works under any HTTP mount — `/kagviz/app/`, a directory three
+ * levels deeper, `npm run preview` — with nothing baked in about the mount
+ * point. Verified 2026-08-26 by serving the deployed tree at an unrelated
+ * depth and driving it. **Not** `file://`, which was claimed here originally
+ * and is wrong: the shell boots through ES module `import()`, and a browser
+ * refuses those over `file://`. A static HTTP server of any kind is the floor.
  *
  * This runs as `postbuild`, so `just check`'s build gate covers it, and it
  * **throws** rather than warning: a kit release that changes this output must

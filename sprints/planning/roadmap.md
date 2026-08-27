@@ -191,6 +191,42 @@ substitute for reading one against the source.
   413 sessions of prompt previews are the real exposure, which is a curation
   problem rather than a hosting one. Packaging only.
 
+- **Sprint 015 — the leaf opens: read what the call actually said**
+  (korg:1659; #1656, #1657, #1658). Sprint 012's leaf tells you a `Bash` call
+  ran, took 4s, sent 90 bytes, got 4,400 back and failed. It cannot tell you
+  what the command *was* — the events document carries no payload text on
+  purpose, because "this document would be the transcript again". A fourth
+  served document (`calls/<host>/<id>.json`) carries each call's input and
+  result, and the segment panel expands a row into it.
+
+  **Measured before proposing, and it inverted the premise.** This was expected
+  to need a server on the host for the data volume. It does not: the harness
+  already bounds payloads by offloading large results to `tool-results/*.txt`
+  and leaving a `<persisted-output>` placeholder, so across 413 sessions the
+  90,182 payloads total **103 MB** — median 308 B, p99 11.8 KB, **max 85 KB**,
+  and *nothing* over 100 KB. Per session that is a 190 KB file at the median
+  against an events document the app already fetches at 42 KB. Same class of
+  artefact, not a new one.
+
+  What *would* justify an engine is the cross-session work under Later/Ideas —
+  trends across a project, comparing two sessions, search — where a query
+  ranges over all 413 and cannot be answered by fetching one file. Building a
+  service for the leaf would cost the property that makes this cheap:
+  `derived/` is disposable and the deploy artifact is one binary a timer runs.
+
+  **The gate is disclosure, not storage.** Everything served today is derived,
+  and the raw mirrors are unreachable. Call text would be the first raw session
+  content on a served surface — and 59 of 413 sessions carry a
+  credential-shaped payload (~51 plausibly live, plus 172 placeholder DSNs).
+  A redactor is the obvious move and the trap: one that catches 51 and misses
+  the 52nd manufactures false confidence, which is the unknown-rendered-as-a-
+  zero this project refuses everywhere else. So #1657 is a decision, taken
+  first, on the record.
+
+  Ranked behind 014 deliberately: `just demo` has the same exposure problem one
+  order of magnitude smaller and is likely to build the curation this reuses.
+  Flip the order if it does not.
+
 ## Later / Ideas
 
 - Cross-session views: how a project's sessions trend over time — the

@@ -135,17 +135,30 @@ surface for any change to a document or the page.
 - **A record is not a turn, and `promptId` does not mark a user prompt.** Two
   traps of one family: fields that look per-turn and are really per-record.
   `promptId` groups every record in a turn, tool results and harness-injected
-  text included — use `is_user_turn`. And one assistant *message* is written as
-  several records, all carrying the same `message.usage`, which is why
-  `tokens.output` is inflated 162% today (trap 6, #1653). Read
-  `docs/transcript-format.md` traps 1, 5 and 6 before touching it — not `INJECTED_PREFIXES` alone, which is only the
-  narrow half. The load-bearing half is **`isMeta`**: the harness flags what it
-  wrote, and that beats matching the shape of it. `<command-*>` is emphatically
-  **not** on the prefix list — it is structure, and `command_line` reads the
-  user's typed line back out of it.
+  text included — use `is_user_turn`. One assistant *message* is written as
+  several records all carrying the same `message.usage`, so a turn is counted
+  per `message.id` and not per record (trap 6, #1653 — it had `tokens.output`
+  inflated 155% until 013). And a `<task-notification>` is the harness
+  reporting a finished background agent into the *user* channel, flagged by
+  nothing but `origin.kind` (trap 7, #1647). Read `docs/transcript-format.md`
+  traps 1, 5, 6 and 7 before touching it — not `INJECTED_PREFIXES` alone, which
+  is only the narrow half. The load-bearing half is **`isMeta`** plus
+  **`origin`**: the harness says what it wrote, and that beats matching the
+  shape of it. `<command-*>` is emphatically **not** on the prefix list — it is
+  structure, and `command_line` reads the user's typed line back out of it.
+  Four members now, and the family has a tell: a field that looks per-turn and
+  is really per-record. Assume there is a fifth.
 - **Never report an unknown as a zero.** Shell-based edits leave no recoverable
   diff; they are counted as `opaque_edits`, not folded into the line deltas. A
-  number kagviz cannot see must be visibly absent, not silently zero.
+  number kagviz cannot see must be visibly absent, not silently zero. Since 013
+  `src/shell.rs` reads the command string so a call that provably wrote nothing
+  is a known zero rather than an unknown — an **allow-list**, because the error
+  is one-directional, and `by_tool.<shell>.calls` stays the total so the
+  read-only share is auditable as the difference. Two lessons from building it,
+  both cheap to repeat: a command-prefix wrapper (`env`, `command`, `sudo`,
+  `timeout`, `xargs`) allow-lists everything behind it, and `opaque == calls` is
+  no longer a proxy for "this tool recovered nothing" — all three renderers were
+  switching on it.
 - **Report active time alongside wall time.** Either alone misleads — resumed
   sessions span days and hold minutes of work.
 - **`null` is not `default`.** `#[serde(default)]` covers an absent field, not

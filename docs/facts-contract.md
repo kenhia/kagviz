@@ -40,12 +40,23 @@ whether it is affected without re-deriving anything.
 | 005 | `active_secs` is redefined as the sum of the span lengths — see below. | 560,283s → **558,730s**; 305 of 405 sessions corrected, every one downward, worst −198s. |
 | 009 | Optional fields are **absent** instead of `null` — every `Option` the document carries: `opened_by`, `chosen`, `header`, `at`, a spawn's `agent_id`/`subagent_type`/`description`/`model`/`started`/`ended`, the top-level `session_id`/`project`/`cwd`/`git_branch`/`started`/`ended`. The contract had promised this since it was written; the serializer only kept it for `labels`. | Bytes change on **397 of 405** sessions; **no value moves**. What had been `null`: `opened_by` 1,971 times (resumed phases), `chosen` 6, `subagent_type` and `description` 5 each (unjoined spawns), `cwd`/`git_branch`/`started`/`ended` once each (one session with no timestamped record). |
 | 009 | `subagents` is the sorted **set** of subagent types invoked, one entry each — as `skills` already was. How many times is `tool_calls` and `delegation`'s job. | 8 of 405 sessions: 21 entries → 9 (`Explore,Explore` → `Explore`). |
+| 013 | `user_prompts`, `phases`, `user_involvement` and `activity…buckets[].user_turns` stop counting `<task-notification>` records — the harness reporting a finished background agent into the user channel, flagged by no `isMeta`. The discriminator is `origin.kind`; see `transcript-format.md` trap 7. | `user_prompts` 1,831 → **1,716** and `phases` 3,802 → **3,687**, both −115: every notification also cut a phase boundary. **49 of 405** sessions. `opened_by` moves on **0** of them — no session was opened by one, which is why the browse page never showed this. |
 
 Each row names what it did *not* touch as precisely as what it did. 005 left
 `wall_secs`, `idle_secs`, `tokens`, `tool_calls`, `tool_failures`, `changes`
 and the span boundaries byte-identical. 009 moved no value at all: strip the
 `null`s from the a8dad05 baseline and dedup its `subagents`, and every one of
 the 405 documents is byte-identical to the new output.
+
+The three 013 rows are one sprint and one baseline regeneration, but three
+independent corrections, so each is stated against the **same** pre-change
+baseline (`19a75d4`, which `main` still reproduced byte for byte on all 405
+transcripts when the sprint opened) rather than against the row above it. They
+barely overlap: the `<task-notification>` row moves the user-side four and
+nothing else; the `message.id` row moves the assistant-side counts and nothing
+else; the `opaque_edits` row moves `changes` and nothing else. Where a phase
+merged, its own `output_tokens`, `records` and `mix` are the sum of the two it
+replaced — the session totals those roll up to did not move.
 
 The renderer round-trips it: a report built from a serialized facts document is
 byte-identical to one built from the summary in memory, and byte-identical

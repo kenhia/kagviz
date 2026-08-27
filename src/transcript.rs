@@ -30,6 +30,21 @@ where
     Ok(Option::<T>::deserialize(de)?.unwrap_or_default())
 }
 
+/// Read a field whose *shape* a future CLI may change, without ever failing
+/// the record over it.
+///
+/// [`null_as_default`] covers a present `null`; this covers a present value of
+/// the wrong type. `origin` is an object today — if some version writes a bare
+/// string there, the choice is between losing the field and losing the record,
+/// and trap 4 is the whole argument for losing the field.
+fn lenient<'de, D, T>(de: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    Ok(Option::<Value>::deserialize(de)?.and_then(|v| serde_json::from_value(v).ok()))
+}
+
 /// One transcript line.
 ///
 /// Only the fields kagviz relies on are typed; everything else lands in
@@ -61,6 +76,11 @@ pub struct Record {
     /// [`Record::is_harness_written`].
     #[serde(rename = "isMeta")]
     pub is_meta: Option<bool>,
+    /// The harness naming what wrote this record. Observed on `user` records
+    /// only, and with exactly two `kind` values — see [`HARNESS_ORIGINS`].
+    /// Read through [`Record::is_harness_written`], never directly.
+    #[serde(default, deserialize_with = "lenient")]
+    pub origin: Option<Origin>,
     /// Which spawned agent a record belongs to. Present on every record of a
     /// `subagents/agent-*.jsonl` sidecar, and on inlined sidechain records.
     /// It is what joins a subagent's work back to the parent's `Agent` call.
@@ -91,10 +111,43 @@ impl Record {
     /// multi-kilobyte instruction document; only the second is flagged, and
     /// without this the document is what gets counted. Absent means "not
     /// flagged", which is the same answer as an explicit `false`.
+    ///
+    /// `isMeta` is not the whole job. A `<task-notification>` — the record the
+    /// harness writes when a background agent finishes — carries no flag at
+    /// all, and until sprint 013 it was counted as the user speaking. What
+    /// names it is [`Origin`]; see trap 7.
     pub fn is_harness_written(&self) -> bool {
         self.is_meta.unwrap_or(false)
+            || self
+                .origin
+                .as_ref()
+                .and_then(|o| o.kind.as_deref())
+                .is_some_and(|kind| HARNESS_ORIGINS.contains(&kind))
     }
 }
+
+/// The harness's own statement of what wrote a record.
+///
+/// Evidence of the same class as `isMeta`, and better than matching the shape
+/// of the text: the harness saying so, rather than kagviz guessing from a
+/// leading `<task-notification>` tag.
+#[derive(Debug, Deserialize)]
+pub struct Origin {
+    pub kind: Option<String>,
+}
+
+/// The `origin.kind` values that name the **harness** writing into the user
+/// channel rather than the user.
+///
+/// A deny-list, and the direction is deliberate. Under-counting the user is
+/// the same class of lie as over-counting them, so a kind kagviz has never
+/// seen stays counted rather than silently vanishing — an allow-list of
+/// `human` would invert that. Measured 2026-08-27 over the pinned
+/// 405-transcript corpus and the 413-session live mirror: exactly two kinds
+/// occur, `human` and `task-notification`, and no record type but `user`
+/// carries `origin` at all. If a third ever appears, it shows up as a prompt
+/// that reads like markup, which is how this one was found.
+pub const HARNESS_ORIGINS: &[&str] = &["task-notification"];
 
 #[derive(Debug, Deserialize)]
 pub struct Message {
@@ -362,6 +415,51 @@ mod tests {
         let line = r#"{"type":"user","message":{"role":"user","content":null}}"#;
         let rec: Record = serde_json::from_str(line).unwrap();
         assert!(matches!(rec.message.unwrap().content, Content::Empty));
+    }
+
+    /// Trap 7: a background agent finishing writes a `user` record with no
+    /// `isMeta` at all. `origin.kind` is the harness saying who wrote it.
+    #[test]
+    fn a_task_notification_is_harness_written_though_nothing_flags_it() {
+        let line = r#"{"type":"user","promptSource":"sdk","origin":{"kind":"task-notification"},
+            "message":{"role":"user","content":"<task-notification>\n<task-id>bkumae6rr</task-id>\n"}}"#;
+        let rec: Record = serde_json::from_str(line).unwrap();
+        assert!(
+            rec.is_meta.is_none(),
+            "the harness sets no flag on this one"
+        );
+        assert!(rec.is_harness_written());
+    }
+
+    /// The other direction, and the reason this is a deny-list: real input
+    /// carries `origin.kind: "human"`, and so does a slash-command scaffold.
+    #[test]
+    fn a_human_origin_is_still_the_user_speaking() {
+        for kind in ["human", "some-future-kind"] {
+            let line = format!(
+                r#"{{"type":"user","origin":{{"kind":"{kind}"}},"message":{{"content":"hi"}}}}"#
+            );
+            let rec: Record = serde_json::from_str(&line).unwrap();
+            assert!(!rec.is_harness_written(), "{kind} must stay counted");
+        }
+    }
+
+    /// The trap-4 family, one field along: `origin` is an object today, and a
+    /// version that writes something else there must cost the field, never the
+    /// record.
+    #[test]
+    fn an_origin_of_the_wrong_shape_costs_the_field_not_the_record() {
+        for raw in [r#""human""#, "null", "17", "[]", r#"{"kind":null}"#] {
+            let line = format!(
+                r#"{{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","origin":{raw},
+                   "message":{{"content":"hi"}}}}"#
+            );
+            let rec: Record = serde_json::from_str(&line).unwrap_or_else(|e| {
+                panic!("origin {raw} took the whole record down: {e}");
+            });
+            assert!(rec.timestamp.is_some());
+            assert!(!rec.is_harness_written());
+        }
     }
 
     #[test]

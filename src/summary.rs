@@ -2209,6 +2209,50 @@ mod tests {
         );
     }
 
+    /// Trap 7, and the reason `isMeta` alone was not enough: the harness
+    /// writes a `<task-notification>` into the user channel when a background
+    /// agent finishes, and flags it with nothing. Counted as a prompt it both
+    /// inflates `user_prompts` and cuts a phase boundary where the user did
+    /// not speak.
+    #[test]
+    fn a_task_notification_is_the_harness_talking_not_a_prompt() {
+        let t = transcript(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","origin":{"kind":"human"},
+                "message":{"content":"run the sweep in the background"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:05.000Z","message":{
+                "usage":{"output_tokens":10},"content":[{"type":"tool_use","id":"t1","name":"Bash"}]}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:40.000Z","promptSource":"sdk",
+                "origin":{"kind":"task-notification"},
+                "message":{"content":"<task-notification>\n<task-id>bk1</task-id>\n<status>completed</status>"}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:01:00.000Z","origin":{"kind":"human"},
+                "message":{"content":"good, now ship it"}}"#,
+        ]);
+        let s = summarize(None, &t, &[]);
+        assert_eq!(s.user_prompts, 2, "the notification is not the user");
+        assert_eq!(
+            s.user_involvement.len(),
+            2,
+            "and it does not reach the involvement list, where it would read \
+             as the user typing markup"
+        );
+        // Two phases, not three. The notification arrives mid-work and cuts
+        // nothing — that is the half of this fix `phases` carries.
+        assert_eq!(s.phases.len(), 2);
+        assert_eq!(
+            s.phases[1].opened_by.as_deref(),
+            Some("good, now ship it"),
+            "the boundary belongs to the user's line, not the notification"
+        );
+        let turns: u32 = s
+            .activity
+            .spans
+            .iter()
+            .flat_map(|sp| &sp.buckets)
+            .map(|b| b.user_turns)
+            .sum();
+        assert_eq!(turns, 2, "the strip counts what the facts count");
+    }
+
     /// `active_secs` was `wall_secs - idle_secs` — two truncations — while the
     /// spans truncate once each, so the headline and the strip disagreed by up
     /// to 198s on the corpus's 209-span session. It is now defined as the sum

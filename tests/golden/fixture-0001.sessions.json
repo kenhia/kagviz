@@ -33,7 +33,7 @@
       "facts": "facts/kai/fixture-0001.json",
       "report": "reports/kai/fixture-0001.html",
       "events": "events/kai/fixture-0001.json",
-      "source_digest": "sha256:04abb69f1045b0eeebf517f2fcee95c179fecf58dd0ba0d300d397e3a3ea35d6",
+      "source_digest": "sha256:8629e801e2996d2c220edf525f3d8131f65544c6c62cb4d6d3d3dfd92776b246",
       "kagviz": "<kagviz>"
     }
   ]

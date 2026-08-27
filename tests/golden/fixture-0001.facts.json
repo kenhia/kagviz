@@ -15,7 +15,7 @@
   "wall_secs": 7980,
   "active_secs": 510,
   "idle_secs": 7470,
-  "records": 39,
+  "records": 40,
   "skipped_lines": 0,
   "assistant_turns": 16,
   "user_prompts": 4,
@@ -624,7 +624,7 @@
             "output_tokens": 110
           },
           {
-            "records": 0,
+            "records": 1,
             "tool_calls": 0,
             "tool_failures": 0,
             "user_turns": 0,
@@ -907,7 +907,7 @@
       "secs": 120,
       "span": 1,
       "kind": "delegating",
-      "records": 11,
+      "records": 12,
       "tool_calls": 5,
       "tool_failures": 0,
       "output_tokens": 750,

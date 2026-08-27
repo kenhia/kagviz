@@ -54,8 +54,10 @@ and never rejects an unknown `type`.
 | `message.content[].content` (on a `tool_result`) | The result as the model saw it: a string, or an array of `text`/`image`/`tool_reference` blocks. Kept raw; only its text size is read. |
 | `isSidechain` | Older format's subagent marker. Newer versions write `subagents/` files instead and leave this `false`. |
 | `isMeta` | `true` on `user` records the **harness** wrote, not the user — most visibly the body of an invoked skill. Written as an explicit `false` about as often as it is omitted, so read it as "flagged or not", never as present/absent. `is_user_turn` excludes it. See trap 5. |
+| `origin` | `{"kind": …}`, the harness naming what wrote the record. On `user` records only, and with exactly two values corpus-wide: `human` and `task-notification`. The second is flagged by nothing else. See trap 7. |
+| `promptSource` | `sdk`, `typed`, `system`, `suggestion_accepted`. **Not** a discriminator — real input and task notifications both read `sdk`. Parsed by nothing; recorded here so the next reader does not reach for it. |
 
-## Six traps
+## Seven traps
 
 ### 1. `promptId` does not mark a prompt
 
@@ -238,7 +240,7 @@ derivable from the skill name, and the facts already carry a `skills` list.
 
 ### 6. One assistant message is written as several records, all with the same usage
 
-**Not yet fixed — every token figure kagviz reports is inflated. See #1653.**
+**Fixed in sprint 013.** The numbers below are what kagviz reported before it.
 
 The harness writes one assistant API message as **one record per content
 block** — `thinking`, `text`, `tool_use` — and stamps every one of them with
@@ -273,6 +275,74 @@ per-record. It was found in sprint 012 by reading the app's segment panel
 against the transcript behind it — three rows saying `3,088 out` for one
 message — and not by any test, because **both** the facts and the events count
 it the same wrong way, so every cross-check between them agreed.
+
+### 7. A finished background agent writes into the user channel, and nothing flags it
+
+When a spawned agent finishes, the harness writes a `type: user` record whose
+content is markup:
+
+```jsonc
+{"type":"user","promptSource":"sdk","origin":{"kind":"task-notification"},
+ "message":{"content":"<task-notification>\n<task-id>bkumae6rr</task-id>\n
+   <tool-use-id>toolu_01Yb…</tool-use-id>\n<status>completed</status>…"}}
+```
+
+It carries **no `isMeta`** — absent, not `false` — so trap 5's load-bearing
+marker does not catch it, and until sprint 013 `is_user_turn` accepted it. That
+cost twice: the harness was counted as the user speaking, and because phases cut
+at every user turn, each notification also opened a phase boundary where nobody
+had said anything.
+
+**The discriminator is `origin.kind`.** Measured 2026-08-27 over the pinned
+405-transcript corpus, every `user` record:
+
+| `isMeta` | `origin.kind` | `promptSource` | shape | n |
+|---|---|---|---|---|
+| — | — | — | `tool_result` | 44,317 |
+| **true** | — | — | skill bodies, placeholders | 797 |
+| — | `human` | `sdk` / `typed` / `<none>` / `suggestion_accepted` | real input | 1,064 |
+| — | — | — | `<command-*>` scaffold | 448 |
+| — | `human` | — | `<command-*>` scaffold | 56 |
+| **—** | **`task-notification`** | `sdk` / `system` | **`<task-notification>`** | **115** |
+| — | — | `sdk` / `<none>` | text and block prompts | 296 |
+
+`promptSource` is **not** the discriminator — real input and notifications both
+read `sdk`. `origin.kind` is, and the match is exact: 115 records carry
+`task-notification` and 115 records are `<task-notification>`-shaped, the same
+115.
+
+**Two `origin.kind` values exist and no others** — checked over both the pinned
+corpus and the 413-session live mirror, across every record type, not just
+`user`. `origin` appears on `user` records alone.
+
+So the rule is a **deny-list of one** (`HARNESS_ORIGINS` in
+`src/transcript.rs`), not an allow-list of `human`. The direction is the point:
+under-counting the user is the same class of lie as over-counting them, so a
+kind kagviz has never seen keeps being counted rather than silently vanishing.
+A third kind would surface the way this one did — as a prompt that reads like
+markup.
+
+Do **not** reach for a `<task-notification>` prefix instead.
+`INJECTED_PREFIXES` is the narrow half by design, and `origin` is the harness
+*saying* what wrote the record — the same class of evidence as `isMeta`, and
+better than matching the shape of the text.
+
+Measured over the corpus, before and after:
+
+| | before | after |
+|---|---|---|
+| `user_prompts` | 1,831 | **1,716** |
+| `phases` | 3,802 | **3,687** |
+| sessions affected | | **49 of 405** |
+| sessions whose `opened_by` moved | | **0** |
+
+Every notification cut a spurious boundary, which is why the two fall by the
+same 115. `opened_by` is untouched on every session — which is exactly why this
+never showed on the browse page, and why it took an audit of what a demo would
+put on a shared screen to find it.
+
+Found the same way as traps 1, 5 and 6: a field that looks per-turn and is
+really per-record, or in this case per-*writer*.
 
 ## Line endings
 

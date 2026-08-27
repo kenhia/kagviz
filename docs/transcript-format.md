@@ -12,6 +12,11 @@ the facts each produced at a known commit; see its `README.md`. Earlier
 revisions of this file cited 2.1.209 – 2.1.238, which was the range checked,
 not the range on disk._
 
+_Traps 6 and 7 were measured against that same pinned corpus on 2026-08-27
+(sprint 013), with the `origin.kind` distribution cross-checked against the
+413-session live mirror. No new CLI version: the mirror's newest sessions run
+2.1.233 – 2.1.240, inside the range above._
+
 ## Layout on disk
 
 ```
@@ -54,8 +59,10 @@ and never rejects an unknown `type`.
 | `message.content[].content` (on a `tool_result`) | The result as the model saw it: a string, or an array of `text`/`image`/`tool_reference` blocks. Kept raw; only its text size is read. |
 | `isSidechain` | Older format's subagent marker. Newer versions write `subagents/` files instead and leave this `false`. |
 | `isMeta` | `true` on `user` records the **harness** wrote, not the user — most visibly the body of an invoked skill. Written as an explicit `false` about as often as it is omitted, so read it as "flagged or not", never as present/absent. `is_user_turn` excludes it. See trap 5. |
+| `origin` | `{"kind": …}`, the harness naming what wrote the record. On `user` records only, and with exactly two values corpus-wide: `human` and `task-notification`. The second is flagged by nothing else. See trap 7. |
+| `promptSource` | `sdk`, `typed`, `system`, `suggestion_accepted`. **Not** a discriminator — real input and task notifications both read `sdk`. Parsed by nothing; recorded here so the next reader does not reach for it. |
 
-## Six traps
+## Seven traps
 
 ### 1. `promptId` does not mark a prompt
 
@@ -109,7 +116,7 @@ unified-diff hunks, so per-file line deltas are exact. A `create` result has an
 empty patch and the whole file body in `content`, so its line count is the
 addition.
 
-Anything that edits through the **shell** — `sed`, a heredoc, a redirect —
+Anything that edits through the **shell** — `sed -i`, a heredoc, a redirect —
 leaves no recoverable diff at all. A session that did all its editing through
 `Bash` shows zero file changes unless that gap is surfaced. kagviz therefore
 reports `opaque_edits` beside the line deltas: a zero that means "nothing
@@ -118,6 +125,33 @@ readings, and conflating them makes the whole report untrustworthy.
 
 This matters more than it sounds. Under some agent instructions, shell editing
 is the *default*, so the undercount is systematic rather than occasional.
+
+**But most shell calls are not edits.** Until sprint 013 every `Bash` and
+`PowerShell` call was an `opaque_edit`, so the corpus figure of 21,805 "calls
+that could have changed files" *was* the shell-call count — and 6,430 of them
+are a `grep`, a `sed -n` or a `git status`. `src/shell.rs` now reads the
+command string and rules those out, which moves `opaque_edits` to 15,391
+without moving a single recovered number.
+
+It is an allow-list, and deliberately so: the error here is one-directional. A
+writer judged read-only becomes a zero that should have been an unknown — the
+one thing this project promises not to do — while a reader judged a writer
+costs only precision. So a command is read-only only when *every* simple
+command in it is a known non-writer, and anything unparseable stays opaque:
+command substitution, a heredoc, a subshell, a script block, an unterminated
+quote.
+
+Two things that audit found, worth carrying:
+
+- **A command-prefix wrapper allow-lists everything behind it.** `env` was on
+  the list until a second implementation of the same rule disagreed on one
+  call; eight corpus calls turned out to be `env -i … copilot`,
+  `env -u … just publish` and `env HOME=… cargo`, all judged read-only. `env`,
+  `command`, `sudo`, `timeout`, `nice`, `nohup`, `xargs` and their family are
+  now all off it.
+- **`2>&1` and `> /dev/null` are not writes.** Reading any `>` as a file write
+  left 6,118 read-only calls opaque in an earlier draft — they are the
+  overwhelming majority of `>` in the corpus.
 
 **MCP file servers carry their own diff, and it is recoverable.** Sprint 003
 added an adapter table for them. The measured shape (`mcp__kaed-*__edit`) is
@@ -238,7 +272,7 @@ derivable from the skill name, and the facts already carry a `skills` list.
 
 ### 6. One assistant message is written as several records, all with the same usage
 
-**Not yet fixed — every token figure kagviz reports is inflated. See #1653.**
+**Fixed in sprint 013.** The numbers below are what kagviz reported before it.
 
 The harness writes one assistant API message as **one record per content
 block** — `thinking`, `text`, `tool_use` — and stamps every one of them with
@@ -273,6 +307,111 @@ per-record. It was found in sprint 012 by reading the app's segment panel
 against the transcript behind it — three rows saying `3,088 out` for one
 message — and not by any test, because **both** the facts and the events count
 it the same wrong way, so every cross-check between them agreed.
+
+**Fixed in 013**, and re-measured over the pinned 405-transcript corpus rather
+than the live mirror the discovery was made on:
+
+| | per record | per message | overcount |
+|---|---|---|---|
+| assistant records / messages | 81,049 | **38,764** | +109.1% |
+| `tokens.output` | 83,669,634 | **32,828,298** | +154.9% |
+| delegated `assistant_turns` | 1,720 | **603** | +185.2% |
+| delegated `tokens.output` | 500,833 | **91,502** | +447.3% |
+
+**391 of 405 sessions** move; the 7 with assistant records that do not are the
+ones whose every message is a single record.
+
+Three things checked before the correction was trusted, all over the pinned
+corpus:
+
+- **The usage block is byte-identical across every record of a message** — all
+  42,285 continuation records, zero differ. So "count it once" needs no choice
+  between first, last and max.
+- **A message's records are contiguous** — 0 non-contiguous ids. The
+  implementation still keys on `message.id` rather than on "same as the last
+  one", so an interleaving would dedup rather than double-count.
+- **Every assistant record carries `message.id`** — 0 without. The
+  count-on-its-own fallback for a record with none is therefore held by unit
+  tests, not by a measurement, on the same footing as `isSidechain`.
+
+The correction is in `summary::Counter`, which is the one place a per-record
+quantity is read, so the session, every spawn and the events document all take
+it together. Two consequences worth knowing:
+
+- A message's tokens land in the bucket and phase where the message
+  **opened**, not spread across the records it was written as.
+- The events document's promise that a `turn` is followed directly by its
+  `tool` events still holds when the calls arrive two records later: the
+  records between carry no events of their own. Checked over all 405 sessions
+  and every spawn — no turn's `tools` disagrees with the events that follow it.
+
+### 7. A finished background agent writes into the user channel, and nothing flags it
+
+When a spawned agent finishes, the harness writes a `type: user` record whose
+content is markup:
+
+```jsonc
+{"type":"user","promptSource":"sdk","origin":{"kind":"task-notification"},
+ "message":{"content":"<task-notification>\n<task-id>bkumae6rr</task-id>\n
+   <tool-use-id>toolu_01Yb…</tool-use-id>\n<status>completed</status>…"}}
+```
+
+It carries **no `isMeta`** — absent, not `false` — so trap 5's load-bearing
+marker does not catch it, and until sprint 013 `is_user_turn` accepted it. That
+cost twice: the harness was counted as the user speaking, and because phases cut
+at every user turn, each notification also opened a phase boundary where nobody
+had said anything.
+
+**The discriminator is `origin.kind`.** Measured 2026-08-27 over the pinned
+405-transcript corpus, every `user` record:
+
+| `isMeta` | `origin.kind` | `promptSource` | shape | n |
+|---|---|---|---|---|
+| — | — | — | `tool_result` | 44,317 |
+| **true** | — | — | skill bodies, placeholders | 797 |
+| — | `human` | `sdk` / `typed` / `<none>` / `suggestion_accepted` | real input | 1,064 |
+| — | — | — | `<command-*>` scaffold | 448 |
+| — | `human` | — | `<command-*>` scaffold | 56 |
+| **—** | **`task-notification`** | `sdk` / `system` | **`<task-notification>`** | **115** |
+| — | — | `sdk` / `<none>` | text and block prompts | 296 |
+
+`promptSource` is **not** the discriminator — real input and notifications both
+read `sdk`. `origin.kind` is, and the match is exact: 115 records carry
+`task-notification` and 115 records are `<task-notification>`-shaped, the same
+115.
+
+**Two `origin.kind` values exist and no others** — checked over both the pinned
+corpus and the 413-session live mirror, across every record type, not just
+`user`. `origin` appears on `user` records alone.
+
+So the rule is a **deny-list of one** (`HARNESS_ORIGINS` in
+`src/transcript.rs`), not an allow-list of `human`. The direction is the point:
+under-counting the user is the same class of lie as over-counting them, so a
+kind kagviz has never seen keeps being counted rather than silently vanishing.
+A third kind would surface the way this one did — as a prompt that reads like
+markup.
+
+Do **not** reach for a `<task-notification>` prefix instead.
+`INJECTED_PREFIXES` is the narrow half by design, and `origin` is the harness
+*saying* what wrote the record — the same class of evidence as `isMeta`, and
+better than matching the shape of the text.
+
+Measured over the corpus, before and after:
+
+| | before | after |
+|---|---|---|
+| `user_prompts` | 1,831 | **1,716** |
+| `phases` | 3,802 | **3,687** |
+| sessions affected | | **49 of 405** |
+| sessions whose `opened_by` moved | | **0** |
+
+Every notification cut a spurious boundary, which is why the two fall by the
+same 115. `opened_by` is untouched on every session — which is exactly why this
+never showed on the browse page, and why it took an audit of what a demo would
+put on a shared screen to find it.
+
+Found the same way as traps 1, 5 and 6: a field that looks per-turn and is
+really per-record, or in this case per-*writer*.
 
 ## Line endings
 

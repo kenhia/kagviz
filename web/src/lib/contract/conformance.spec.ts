@@ -189,6 +189,17 @@ describe('the events document', () => {
 		expect(opaqueShellCall?.lines_added).toBeUndefined();
 		expect(opaqueShellCall?.lines_deleted).toBeUndefined();
 	});
+
+	// Sprint 013: a shell call is no longer opaque by virtue of being a shell
+	// call. A consumer that still assumes `tool === 'Bash'` implies `opaque`,
+	// or that `opaque === calls` for a shell tool, is wrong on this golden.
+	it('leaves a shell call that provably wrote nothing off opaque_edits', () => {
+		const readOnly = tools.filter((t: ToolEvent) => t.tool === 'Bash' && !t.opaque);
+		expect(readOnly.length).toBeGreaterThan(0);
+		const bash = facts.changes.by_tool['Bash'];
+		expect(bash.opaque).toBeLessThan(bash.calls);
+		expect(bash.calls - bash.opaque).toBe(readOnly.length);
+	});
 });
 
 describe('sessions.json', () => {

@@ -6,6 +6,7 @@
 
 use crate::discover::SessionPaths;
 use crate::events;
+use crate::shell;
 use crate::transcript::{
     Block, Content, INJECTED_PREFIXES, Record, Subagent, Transcript, command_line,
 };
@@ -619,8 +620,25 @@ impl Summary {
 }
 
 /// Tools that routinely change files without exposing a diff kagviz can read.
+///
+/// Being one of these is necessary but no longer sufficient: since sprint 013
+/// the call's own command string is read too, and one that provably wrote
+/// nothing is not an unknown. See [`shell_wrote_nothing`].
 fn may_edit_opaquely(tool: &str) -> bool {
     matches!(tool, "Bash" | "PowerShell")
+}
+
+/// Whether a shell call's command string rules out a file change.
+///
+/// The input is unwrapped here rather than in [`shell`] so that a call with no
+/// readable `command` — an absent key, a non-string, a shape a future harness
+/// invents — falls to the opaque side along with everything else the
+/// classifier cannot read. There is no third answer.
+fn shell_wrote_nothing(input: Option<&Value>) -> bool {
+    input
+        .and_then(|i| i.get("command"))
+        .and_then(Value::as_str)
+        .is_some_and(shell::wrote_nothing)
 }
 
 /// Count a session.
@@ -720,7 +738,12 @@ pub fn summarize_with_events(
         if rec.kind == "assistant"
             && let Some(msg) = &rec.message
         {
-            if let Some(model) = &msg.model {
+            // Turns per model, so it counts what `assistant_turns` counts:
+            // the decision is the counter's, read back off `Counted` rather
+            // than made a second time here.
+            if let Some(model) = &msg.model
+                && counted.counted_turn
+            {
                 *s.models.entry(model.clone()).or_default() += 1;
             }
             for block in msg.content.blocks() {
@@ -1118,6 +1141,19 @@ struct Counter {
     events: Vec<events::Event>,
     /// tool_use id -> index into `events`, so a result joins its call.
     open: BTreeMap<String, usize>,
+    /// Shell tool -> how many of its calls were judged read-only, so
+    /// [`Counter::finish`] can charge `opaque_edits` for the rest while
+    /// `by_tool.<shell>.calls` stays the total.
+    shell_read_only: BTreeMap<String, u32>,
+    /// `message.id` -> index of that message's `Turn` event.
+    ///
+    /// One API message is written as one record per content block — `thinking`,
+    /// `text`, `tool_use` — and every one of them carries the same id and the
+    /// *same* `usage`. Counting per record read one message's tokens once per
+    /// block it was split into. This is what makes the message the turn: the
+    /// first record of it opens one, and the rest contribute only their tool
+    /// calls, to the turn already open. See `docs/transcript-format.md` trap 6.
+    messages: BTreeMap<String, usize>,
 }
 
 /// What one record contributed: the slice of the count a bucket or a phase
@@ -1125,6 +1161,12 @@ struct Counter {
 #[derive(Debug, Default, Clone)]
 struct Counted {
     at: Option<DateTime<Utc>>,
+    /// Whether this record *opened* an assistant turn, as opposed to being a
+    /// later block of one already counted. The only place the per-message
+    /// decision is made is [`Counter::count`]; anything outside the counter
+    /// that counts per turn — `models` — reads it from here rather than
+    /// deciding again.
+    counted_turn: bool,
     tool_calls: u32,
     tool_failures: u32,
     output_tokens: u64,
@@ -1164,37 +1206,60 @@ impl Counter {
         if rec.kind == "assistant"
             && let Some(msg) = &rec.message
         {
-            self.assistant_turns += 1;
-            let tokens = msg.usage.map(|u| TokenTotals {
-                input: u.input_tokens,
-                output: u.output_tokens,
-                thinking: u.output_tokens_details.thinking_tokens,
-                cache_read: u.cache_read_input_tokens,
-                cache_write: u.cache_creation_input_tokens,
-            });
-            if let Some(t) = &tokens {
-                self.tokens.input += t.input;
-                self.tokens.output += t.output;
-                self.tokens.thinking += t.thinking;
-                self.tokens.cache_read += t.cache_read;
-                self.tokens.cache_write += t.cache_write;
-                counted.output_tokens += t.output;
-            }
             let calls: Vec<&Block> = msg
                 .content
                 .blocks()
                 .iter()
                 .filter(|b| b.kind == "tool_use" && b.name.is_some())
                 .collect();
-            // The turn first, then its calls in the order the message made
-            // them — the adjacency a consumer groups on.
-            self.events.push(events::Event::Turn {
-                at,
-                phase: None,
-                model: msg.model.clone(),
-                tokens,
-                tools: calls.len() as u32,
-            });
+            // A message already opened by an earlier record of it. Its usage
+            // is that same block written down again and must not be added
+            // twice; its tool calls are real and are counted below, onto the
+            // turn that is already open. A record with no `message.id` has
+            // nothing to be a continuation *of*, and counts on its own.
+            let opened = msg
+                .id
+                .as_ref()
+                .and_then(|id| self.messages.get(id))
+                .copied();
+            if let Some(turn) = opened {
+                if let Some(events::Event::Turn { tools, .. }) = self.events.get_mut(turn) {
+                    *tools += calls.len() as u32;
+                }
+            } else {
+                self.assistant_turns += 1;
+                counted.counted_turn = true;
+                let tokens = msg.usage.map(|u| TokenTotals {
+                    input: u.input_tokens,
+                    output: u.output_tokens,
+                    thinking: u.output_tokens_details.thinking_tokens,
+                    cache_read: u.cache_read_input_tokens,
+                    cache_write: u.cache_creation_input_tokens,
+                });
+                if let Some(t) = &tokens {
+                    self.tokens.input += t.input;
+                    self.tokens.output += t.output;
+                    self.tokens.thinking += t.thinking;
+                    self.tokens.cache_read += t.cache_read;
+                    self.tokens.cache_write += t.cache_write;
+                    counted.output_tokens += t.output;
+                }
+                if let Some(id) = &msg.id {
+                    self.messages.insert(id.clone(), self.events.len());
+                }
+                // The turn first, then its calls in the order the message made
+                // them — the adjacency a consumer groups on. A message split
+                // across records keeps it: the records between carry no events
+                // of their own, so the calls still follow the turn they belong
+                // to, however many records later they were written.
+                self.events.push(events::Event::Turn {
+                    at,
+                    phase: None,
+                    model: msg.model.clone(),
+                    tokens,
+                    tools: calls.len() as u32,
+                });
+            }
             for block in calls {
                 let name = block.name.as_deref().unwrap_or_default();
                 *self.tool_calls.entry(name.to_string()).or_default() += 1;
@@ -1202,6 +1267,16 @@ impl Counter {
                 if let Some(id) = &block.id {
                     self.tool_names.insert(id.clone(), name.to_string());
                     self.open.insert(id.clone(), self.events.len());
+                }
+                // A shell call is opaque from the moment it is made — an
+                // interrupted one leaves no result and is still an edit kagviz
+                // cannot see — *unless* the command it was handed provably
+                // wrote nothing. Judged from the call for the same reason it
+                // is counted from the call.
+                let opaque = may_edit_opaquely(name);
+                let read_only = opaque && shell_wrote_nothing(block.input.as_ref());
+                if read_only {
+                    *self.shell_read_only.entry(name.to_string()).or_default() += 1;
                 }
                 self.events.push(events::Event::Tool {
                     at,
@@ -1216,11 +1291,10 @@ impl Counter {
                     files: Vec::new(),
                     lines_added: None,
                     lines_deleted: None,
-                    // A shell call is opaque from the moment it is made: an
-                    // interrupted one leaves no result and is still an edit
-                    // kagviz cannot see. The tally counts the same thing
-                    // from the call totals in `finish`.
-                    opaque: may_edit_opaquely(name),
+                    // The tally counts the same thing from the call totals
+                    // in `finish`, so a per-call sum of these is the facts'
+                    // `changes` exactly.
+                    opaque: opaque && !read_only,
                 });
             }
         }
@@ -1297,15 +1371,20 @@ impl Counter {
 
     /// Close the pass.
     ///
-    /// Shell tools that ran at all are counted as "could have changed files
-    /// unseen", never as changes. Every one of them is opaque by construction,
-    /// so they are added from the call tally rather than from results — an
-    /// interrupted `Bash` leaves no result and is still an edit kagviz cannot
-    /// see.
+    /// Shell tools that ran are counted as "could have changed files unseen",
+    /// never as changes, and are added from the call tally rather than from
+    /// results — an interrupted `Bash` leaves no result and is still an edit
+    /// kagviz cannot see.
+    ///
+    /// Since sprint 013 only the calls whose command string could not be ruled
+    /// out are charged. `calls` stays every call of the tool, so the read-only
+    /// share is visible as the difference rather than taken on faith.
     fn finish(mut self) -> Counts {
         for (name, n) in &self.tool_calls {
             if may_edit_opaquely(name) {
-                self.changes.opaque(name, *n as usize);
+                let read_only = self.shell_read_only.get(name).copied().unwrap_or(0);
+                self.changes
+                    .shell(name, *n as usize, n.saturating_sub(read_only) as usize);
             }
         }
         self.stamps.sort_unstable();
@@ -1966,6 +2045,21 @@ impl ChangeTally {
         }
     }
 
+    /// Record a shell tool's calls: `calls` were made and `opaque` of them
+    /// could have written something kagviz cannot see.
+    ///
+    /// The two are separate because `calls` must stay the **total**. It is the
+    /// audit surface for the allow-list in [`shell`] — the same argument
+    /// `by_tool` itself makes — and without it "N calls could have changed
+    /// files" would have to be taken on faith about how many were judged
+    /// harmless.
+    fn shell(&mut self, tool: &str, calls: usize, opaque: usize) {
+        let slot = self.changes.by_tool.entry(tool.to_string()).or_default();
+        slot.calls += calls;
+        slot.opaque += opaque;
+        self.changes.opaque_edits += opaque;
+    }
+
     /// Record `n` calls of a tool that changes files with nothing to read.
     fn opaque(&mut self, tool: &str, n: usize) {
         let slot = self.changes.by_tool.entry(tool.to_string()).or_default();
@@ -2207,6 +2301,153 @@ mod tests {
             s.pasted_attachments, 1,
             "attachments are counted from the blocks, not from authorship"
         );
+    }
+
+    /// Trap 6. The harness writes one API message as one record per content
+    /// block — `thinking`, `text`, `tool_use` — and stamps every one of them
+    /// with the same `message.id` and the *same* `usage`. Counted per record,
+    /// one message's 3,088 output tokens read as 9,264.
+    #[test]
+    fn one_message_split_across_records_is_one_turn_counted_once() {
+        let usage = r#""usage":{"input_tokens":900,"output_tokens":3088,
+            "cache_read_input_tokens":40000,"cache_creation_input_tokens":12,
+            "output_tokens_details":{"thinking_tokens":2000}}"#;
+        let t = transcript(&[
+            &format!(
+                r#"{{"type":"assistant","timestamp":"2026-08-20T10:00:00.000Z","message":{{
+                   "id":"msg_013aTUq198","model":"claude-opus-5",{usage},
+                   "content":[{{"type":"thinking"}}]}}}}"#
+            ),
+            &format!(
+                r#"{{"type":"assistant","timestamp":"2026-08-20T10:00:02.000Z","message":{{
+                   "id":"msg_013aTUq198","model":"claude-opus-5",{usage},
+                   "content":[{{"type":"text","text":"here goes"}}]}}}}"#
+            ),
+            &format!(
+                r#"{{"type":"assistant","timestamp":"2026-08-20T10:00:03.000Z","message":{{
+                   "id":"msg_013aTUq198","model":"claude-opus-5",{usage},
+                   "content":[{{"type":"tool_use","id":"t1","name":"Read"}}]}}}}"#
+            ),
+        ]);
+        let s = summarize(None, &t, &[]);
+        assert_eq!(s.assistant_turns, 1, "one message is one turn");
+        assert_eq!(s.tokens.output, 3088, "the usage block is not three usages");
+        assert_eq!(s.tokens.input, 900, "and neither is any other field of it");
+        assert_eq!(s.tokens.thinking, 2000);
+        assert_eq!(s.tokens.cache_read, 40000);
+        assert_eq!(s.tokens.cache_write, 12);
+        assert_eq!(
+            s.models.get("claude-opus-5"),
+            Some(&1),
+            "turns per model counts what assistant_turns counts"
+        );
+        assert_eq!(s.tool_calls.get("Read"), Some(&1), "the call is still real");
+        assert_eq!(s.records, 3, "records still counts records");
+    }
+
+    /// A record with no `message.id` has nothing to be a continuation *of*.
+    /// Zero such assistant records exist in the pinned corpus, so this path is
+    /// held here rather than by a measurement — the same footing `isSidechain`
+    /// stands on.
+    #[test]
+    fn records_without_a_message_id_still_count_one_turn_each() {
+        let t = transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "model":"claude-opus-5","usage":{"output_tokens":10},"content":[{"type":"text"}]}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:01.000Z","message":{
+                "model":"claude-opus-5","usage":{"output_tokens":10},"content":[{"type":"text"}]}}"#,
+        ]);
+        let s = summarize(None, &t, &[]);
+        assert_eq!(s.assistant_turns, 2);
+        assert_eq!(s.tokens.output, 20);
+        assert_eq!(s.models.get("claude-opus-5"), Some(&2));
+    }
+
+    /// The events contract promises a `turn` is followed directly by its
+    /// `tool` events. A split message must keep that: the turn opens on the
+    /// first record, the calls arrive two records later, and the records
+    /// between carry no events of their own.
+    #[test]
+    fn a_split_messages_calls_still_follow_the_turn_that_made_them() {
+        let t = transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "id":"m1","model":"claude-opus-5","usage":{"output_tokens":50},
+                "content":[{"type":"thinking"}]}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:01.000Z","message":{
+                "id":"m1","model":"claude-opus-5","usage":{"output_tokens":50},
+                "content":[{"type":"text","text":"ok"}]}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:02.000Z","message":{
+                "id":"m1","model":"claude-opus-5","usage":{"output_tokens":50},
+                "content":[{"type":"tool_use","id":"t1","name":"Read"},
+                           {"type":"tool_use","id":"t2","name":"Grep"}]}}"#,
+        ]);
+        let (s, ev) = summarize_with_events(None, &t, &[]);
+        assert_eq!(s.assistant_turns, 1);
+        let kinds: Vec<&str> = ev
+            .events
+            .iter()
+            .map(|e| match e {
+                events::Event::Turn { .. } => "turn",
+                events::Event::Tool { .. } => "tool",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            ["turn", "tool", "tool"],
+            "adjacency survives the split"
+        );
+        let events::Event::Turn { tools, tokens, .. } = &ev.events[0] else {
+            panic!("the first event is the turn");
+        };
+        assert_eq!(
+            *tools, 2,
+            "the turn claims both calls, however late they came"
+        );
+        assert_eq!(tokens.map(|t| t.output), Some(50));
+    }
+
+    /// Trap 7, and the reason `isMeta` alone was not enough: the harness
+    /// writes a `<task-notification>` into the user channel when a background
+    /// agent finishes, and flags it with nothing. Counted as a prompt it both
+    /// inflates `user_prompts` and cuts a phase boundary where the user did
+    /// not speak.
+    #[test]
+    fn a_task_notification_is_the_harness_talking_not_a_prompt() {
+        let t = transcript(&[
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:00.000Z","origin":{"kind":"human"},
+                "message":{"content":"run the sweep in the background"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:05.000Z","message":{
+                "usage":{"output_tokens":10},"content":[{"type":"tool_use","id":"t1","name":"Bash"}]}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:00:40.000Z","promptSource":"sdk",
+                "origin":{"kind":"task-notification"},
+                "message":{"content":"<task-notification>\n<task-id>bk1</task-id>\n<status>completed</status>"}}"#,
+            r#"{"type":"user","timestamp":"2026-08-20T10:01:00.000Z","origin":{"kind":"human"},
+                "message":{"content":"good, now ship it"}}"#,
+        ]);
+        let s = summarize(None, &t, &[]);
+        assert_eq!(s.user_prompts, 2, "the notification is not the user");
+        assert_eq!(
+            s.user_involvement.len(),
+            2,
+            "and it does not reach the involvement list, where it would read \
+             as the user typing markup"
+        );
+        // Two phases, not three. The notification arrives mid-work and cuts
+        // nothing — that is the half of this fix `phases` carries.
+        assert_eq!(s.phases.len(), 2);
+        assert_eq!(
+            s.phases[1].opened_by.as_deref(),
+            Some("good, now ship it"),
+            "the boundary belongs to the user's line, not the notification"
+        );
+        let turns: u32 = s
+            .activity
+            .spans
+            .iter()
+            .flat_map(|sp| &sp.buckets)
+            .map(|b| b.user_turns)
+            .sum();
+        assert_eq!(turns, 2, "the strip counts what the facts count");
     }
 
     /// `active_secs` was `wall_secs - idle_secs` — two truncations — while the
@@ -2615,11 +2856,51 @@ mod tests {
 
     #[test]
     fn shell_calls_are_reported_as_opaque_rather_than_as_no_change() {
+        // No `input` at all: the classifier has no command to read, so the
+        // call keeps the answer it had before there was one — an unknown.
         let t = transcript(&[r#"{"type":"assistant","message":{"content":[
                 {"type":"tool_use","id":"t1","name":"Bash"}]}}"#]);
         let s = summarize(None, &t, &[]);
         assert_eq!(s.changes.files_touched, 0);
         assert_eq!(s.changes.opaque_edits, 1);
+    }
+
+    /// Narrowing `opaque_edits` to the shell calls that could have written.
+    /// The count that must not move is `by_tool.<shell>.calls`: it is the
+    /// total, and the read-only share is meant to be readable as the
+    /// difference rather than taken on faith.
+    #[test]
+    fn a_shell_call_that_provably_wrote_nothing_is_not_an_unknown() {
+        let t = transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "id":"m1","usage":{"output_tokens":10},"content":[
+                {"type":"tool_use","id":"t1","name":"Bash","input":{"command":"grep -rn TODO src/"}},
+                {"type":"tool_use","id":"t2","name":"Bash","input":{"command":"sed -i 's/a/b/' src/x.rs"}},
+                {"type":"tool_use","id":"t3","name":"Bash","input":{"command":"git status --short"}}]}}"#,
+        ]);
+        let (s, ev) = summarize_with_events(None, &t, &[]);
+        let bash = &s.changes.by_tool["Bash"];
+        assert_eq!(bash.calls, 3, "calls stays every call of the tool");
+        assert_eq!(bash.opaque, 1, "only the sed -i could have written");
+        assert_eq!(s.changes.opaque_edits, 1);
+        assert_eq!(s.changes.files_touched, 0, "a reader touches no files");
+
+        // And the events say the same thing, call by call — they are what the
+        // count is a count of.
+        let flags: Vec<bool> = ev
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                events::Event::Tool { opaque, .. } => Some(*opaque),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(flags, [false, true, false]);
+        assert_eq!(
+            flags.iter().filter(|o| **o).count(),
+            s.changes.opaque_edits,
+            "opaque events are exactly opaque_edits"
+        );
     }
 
     fn subagent(agent_id: &str, lines: &[&str]) -> Subagent {
@@ -3020,7 +3301,7 @@ mod tests {
                 r#"{"type":"assistant","timestamp":"2026-08-20T10:00:10.000Z","message":{
                     "model":"claude-opus-5","usage":{"output_tokens":40},
                     "content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/a.rs"}},
-                               {"type":"tool_use","id":"t2","name":"Bash","input":{"command":"ls"}}]}}"#,
+                               {"type":"tool_use","id":"t2","name":"Bash","input":{"command":"rm -rf out/"}}]}}"#,
                 r#"{"type":"user","timestamp":"2026-08-20T10:00:12.000Z","message":{"content":[
                     {"type":"tool_result","tool_use_id":"t1","content":"one\ntwo"}]}}"#,
                 r#"{"type":"user","timestamp":"2026-08-20T10:00:15.000Z","message":{"content":[

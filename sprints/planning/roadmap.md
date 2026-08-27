@@ -164,44 +164,24 @@ different risks — part 1 was plumbing, part 2 the interaction — and part 1
 shipped useful on its own, which is what let part 2 be about the interaction and
 nothing else.
 
-What is queued next is the facts catching up. Sprint 012 found #1653 while
-looking at its own panel, and it is the largest correction in the queue.
+Sprint 013 is the facts catching up, and it is the largest correction the
+project has made. Three breaking changes, one baseline regeneration
+(`sprints/013-three-facts-corrections.md`): `assistant_turns` and every token
+figure were counting **records** where the harness writes one message as
+several — `tokens.output` 83.7M → **32.8M** over the pinned corpus, 391 of 405
+sessions; `<task-notification>` records were being counted as the user
+speaking; and `opaque_edits` was every shell call rather than the ones that
+could have written.
+
+The pattern behind all three is worth keeping in view: **every one was a field
+that looks per-turn and is really per-record**, and none was found by a test.
+#1653 came out of reading sprint 012's own segment panel against the transcript
+behind it; #1647 came out of asking what a demo would put on a shared screen.
+The facts and the events agreed throughout, because both counted the same wrong
+way — which is exactly why a cross-check between two consumers is not a
+substitute for reading one against the source.
 
 ## Next
-
-- **Sprint 013 — three facts corrections, one baseline regeneration**
-  (korg:1643; #1640, #1647, #1653). Three measured breaking changes bundled so
-  the corpus baseline is regenerated once rather than three times.
-
-  **#1653 is the largest and was found in sprint 012.** One assistant API
-  message is written as one record per content block — `thinking`, `text`,
-  `tool_use` — each carrying the same `message.id` and the same
-  `message.usage`, and `summary.rs` counts per record. Over 408 sessions:
-  `tokens.output` 87,992,219 → **33,570,698** (+162% as counted),
-  `assistant_turns` 82,416 → **39,343** (+109%), 403 sessions affected. The
-  usage block is byte-identical across every record of a message (10,604
-  checked, none differ), so the fix is to dedup on `message.id`. It moves
-  `tokens`, `assistant_turns`, `models`, the phase and bucket `output_tokens`,
-  the delegated tier and the events' `turn` events.
-
-  `opaque_edits` narrows to calls that *could* have written: of 21,805 shell
-  calls — every one an `opaque_edit` today — 9,828 carry no write-shaped token
-  at all, and a further 3,771 are only git plumbing or build tools. An
-  allowlist over the command string, conservative in the project's direction:
-  anything unparsed stays opaque.
-
-  And `<task-notification>` records stop being counted as user prompts. Found
-  2026-08-26 while auditing what a demo would put on a shared screen: the
-  harness writes them as `type: user` with **no `isMeta` flag**, so 117 of
-  1,843 prompt previews across 48 of 413 sessions are harness XML sitting
-  where the user's own words belong. A fourth member of the `promptId`/`isMeta`
-  trap family and the first the load-bearing half does not catch — the
-  discriminator is `origin.kind`, not `promptSource`, which reads `"sdk"` for
-  both. It moves `user_prompts`, `phases`, `user_involvement` and
-  `activity…buckets[].user_turns`: the same four fields sprint 005 moved.
-
-  The other half of the old entry here — an inferred `git diff` figure — stays
-  rejected on sprint 003's grounds and is not queued.
 
 - **Sprint 014 — `just demo`** (korg:1649; #1648). One recipe to show kagviz to
   someone who is not on the tailnet: a curated session tree, the app deployed

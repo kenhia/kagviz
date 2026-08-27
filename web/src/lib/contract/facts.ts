@@ -45,7 +45,14 @@ export interface ToolChanges {
 	files_touched: number;
 	lines_added: number;
 	lines_deleted: number;
-	/** How many of `calls` gave no readable **line counts** — not "unread". */
+	/**
+	 * How many of `calls` gave no readable **line counts** — not "unread".
+	 *
+	 * `calls` is the total and `opaque` is a subset of it, so the difference
+	 * is meaningful and a renderer must not treat `opaque === calls` as
+	 * "recovered nothing". Since sprint 013 a shell call whose command
+	 * provably wrote nothing is neither readable nor opaque.
+	 */
 	opaque: number;
 }
 
@@ -53,7 +60,12 @@ export interface Changes {
 	files_touched: number;
 	lines_added: number;
 	lines_deleted: number;
-	/** Calls that could have changed files and left no recoverable diff. */
+	/**
+	 * Calls that could have changed files and left no recoverable diff.
+	 *
+	 * Not every shell call: since sprint 013 the command string is read, and
+	 * one that provably wrote nothing is a known zero rather than an unknown.
+	 */
 	opaque_edits: number;
 	by_tool: Record<string, ToolChanges>;
 }

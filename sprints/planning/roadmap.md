@@ -157,6 +157,30 @@ since day one.
   transcript behind it; no test could see it, because both documents count the
   same wrong way. See `sprints/012-timeline-forest-tree-leaf.md`.
 
+- **Sprint 014 — `just demo`: kagviz, shown off the tailnet.** copyparty binds
+  loopback and the `:8027` listeners on kai's tailnet IP are `tailscaled`, so
+  there was no LAN path to kagviz at all — and `kwork` is deliberately off the
+  tailnet while reaching the LAN fine. `collect/demo.sh` builds a curated tree
+  out of the live mirror, derives, installs the app and serves `derived/` on
+  this host's LAN address, corpus chosen by glob and defaulting to kagviz's own
+  sessions. Packaging only: nothing touches the extractor, the facts, the
+  contract or the app.
+
+  **Scoped down at the start, and that decision travelled.** The proposal
+  bundled an audit of what the tree would put on a shared screen; Ken's call
+  was that the corpus is hand-picked and pre-checked by the presenter, so the
+  recipe selects and serves rather than checking. It prints what is in the tree
+  and says outright that the previews are the user's own words and nothing here
+  checked them. Recorded on korg:1649, because sprint 015 had been ranked
+  behind this one on the opposite assumption.
+
+  The bug in the three proven commands: `derive` writes `index.html` last and
+  links the app only when `derived/app/index.html` already exists, so in the
+  order `derive → web-deploy → serve` the demo's browse page ships with no way
+  into the app. `demo.sh` re-runs `kagviz index` after the deploy. The same
+  trap is recorded in `docs/collection.md` for the production deploy, from the
+  other direction. See `sprints/014-just-demo-off-tailnet.md`.
+
 ## Now
 
 Front-end v1 (#1619) is done: it was split in two because its halves carried
@@ -182,14 +206,6 @@ way — which is exactly why a cross-check between two consumers is not a
 substitute for reading one against the source.
 
 ## Next
-
-- **Sprint 014 — `just demo`** (korg:1649; #1648). One recipe to show kagviz to
-  someone who is not on the tailnet: a curated session tree, the app deployed
-  into it, an audit of what it would put on a shared screen, served over plain
-  LAN HTTP. copyparty binds loopback only — the tailnet-IP listeners on its
-  port are `tailscaled` — so there is no LAN path today, and the live tree's
-  413 sessions of prompt previews are the real exposure, which is a curation
-  problem rather than a hosting one. Packaging only.
 
 - **Sprint 015 — the leaf opens: read what the call actually said**
   (korg:1659; #1656, #1657, #1658). Sprint 012's leaf tells you a `Bash` call
@@ -223,9 +239,15 @@ substitute for reading one against the source.
   zero this project refuses everywhere else. So #1657 is a decision, taken
   first, on the record.
 
-  Ranked behind 014 deliberately: `just demo` has the same exposure problem one
-  order of magnitude smaller and is likely to build the curation this reuses.
-  Flip the order if it does not.
+  **That flip condition fired.** 015 was ranked behind 014 on the assumption
+  that `just demo` would build curation this could reuse. It did not: 014
+  ships transport and a selection knob, and its curation is a human pre-check
+  (korg:1649, and `sprints/014-just-demo-off-tailnet.md`). So there is no
+  mechanism to inherit and nothing to treat as a gate — 015 should ship
+  `calls/` **off by default** (`derive` writes it only when asked; the demo
+  tree never contains it), which keeps 014's exposure surface provably
+  unchanged and leaves #1657's decision the only thing standing between the
+  call text and a served surface.
 
 ## Later / Ideas
 

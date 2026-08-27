@@ -197,3 +197,40 @@ and the text measured are the same bytes.
   panel prints equal to `result_bytes` on every one.
 - `--calls` → `--drop-calls` → `--calls` round-tripped on a real tree, with
   `sessions.json` linking and un-linking to match.
+
+## Deployed
+
+**2026-08-27, kai** — from merged `main` at `a56530c`. Rollback target: `b2975c6`
+(sprint 014's deploy).
+
+| | |
+|---|---|
+| extractor | `target/release/kagviz`, the binary the 04:00 timer runs |
+| served tree | `/ai-data/kagviz-data/live/derived/`, 421 sessions re-derived |
+| app bundle | `derived/app/`, deployed **before** the derive so `index.html` links it |
+| `META.json` | `0.1.0 (a56530c)` — matches `HEAD` |
+
+**Zero derived bytes moved across all 1,263 documents.** The stamp changed and
+no value did — the same result the 405-session pinned sweep gave before the
+merge, now confirmed against the live fleet's 421. That is the deploy's proof
+that this sprint was additive, and it is the thing a stamp alone cannot say.
+
+**The off-by-default contract held where it actually matters.** `just
+collect-derive` runs a plain `derive`, so:
+
+- `derived/calls/` — **absent**. The nightly path writes no call text.
+- `sessions.json` — **0 of 421** rows carry a `calls` link, so the app offers
+  to open a call and then says the tree carries none, which is the truth.
+- the raw mirrors are still unreachable: `403` on traversal, unchanged.
+
+Verified live over copyparty rather than the filesystem: `index.html` 200,
+`app/index.html` 200, one `href="app/index.html"` on the browse page (the
+step-3 ordering trap, caught), a session's events document 200, and its calls
+document a **404 — the expected answer**, not a fault. The deployed bundle
+carries every 015 string: the expand button, "Raw session content", the
+interrupted-call line, the offloaded-preview line, the `result_blocks` line and
+`kagviz derive --calls`.
+
+**What this cannot assert:** that tonight's 04:00 run succeeds — that depends on
+hosts being reachable, and a deploy deliberately does not sync. `just
+collect-status` is the check for the run itself, in the morning.

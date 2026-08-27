@@ -161,6 +161,22 @@ interleaving would dedup rather than double-count); and every assistant record
 carries an id (0 without, so the count-on-its-own fallback is unit-test-held,
 on the same footing as `isSidechain`).
 
+## The baseline
+
+Written at `b0edcaa` under `/ai-data/kagviz-data/baselines/<host>-2026-08-23/`,
+facts and a matching `b0edcaa.events/`, 405 of each. It round-trips (0 files
+differ against itself) and differs from `19a75d4` on 391 sessions. The four
+older baselines are untouched — a baseline's value is saying what was true
+then, so they are never overwritten. The corpus `README.md` carries the
+before/after table and now points its regression-check snippet at `b0edcaa`.
+
+**The end-to-end check, on the session the work item named as worst.**
+`a811ca00` in `hv-simulator` had been reporting **5,560 turns / 6,628,363
+output** on its report and its session page. With the shipped binary it reports
+**2,908 / 2,704,095** — exactly what #1653 predicted, arrived at independently
+of the corpus aggregate. The same session shows #1640 too: 1,004 shell calls,
+773 of them opaque, 231 judged read-only.
+
 ## Fixture
 
 It now carries one of each new shape, which is what it is for: a
@@ -182,4 +198,8 @@ dedups through the same accumulator. Its four `Bash` calls already split
 
 ## Deployed
 
-Pending.
+Pending. **Worth knowing before it happens:** the live derived tree under
+`/ai-data/kagviz-data/live/derived` still holds facts from the old binary, so
+every number the browse page and the app are serving is the pre-013 one until
+`just deploy` re-derives them. That is the largest single re-derivation this
+project has done, and it is why the deploy is not optional bookkeeping here.

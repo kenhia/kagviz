@@ -52,7 +52,14 @@ that runs inside `just check`, so a facts change that breaks the app fails the
 Rust build the day it lands. `kagviz show <id> --events` emits the detail tier under
 it — every turn and tool call, joined to its phase, with sizes, outcomes and
 the files each call changed — as a separate document, so the facts stay light
-and a click on the timeline has something to read.
+and a click on the timeline has something to read. `kagviz show <id> --calls`
+emits the tier under *that*: what each call actually said, and what came back.
+
+The calls document is **the one thing kagviz does not derive by default**.
+Everything else it serves is counted *from* the transcripts; this is the
+transcripts' own text, so `kagviz derive` writes it only when asked
+(`--calls`), and the flag is the disclosure decision rather than a
+convenience. See `docs/facts-contract.md`.
 
 ## The report
 
@@ -226,8 +233,9 @@ operating notes. `sessions.json` is a contract like the facts —
 
 ## The app
 
-`web/` is a static single-page app over the same three documents: the index,
-the facts, and (in part 2) the events. No backend — it is HTML, CSS and JS
+`web/` is a static single-page app over the same four documents: the index,
+the facts, the events, and — only where a tree carries one — the calls. No
+backend — it is HTML, CSS and JS
 copied next to the data on copyparty, at
 `/kagviz/app/index.html`. It carries the report's panels plus what a static
 page cannot: sorting, filtering, and a page per session reachable by URL.

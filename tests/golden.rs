@@ -347,3 +347,155 @@ fn copy_tree(from: &Path, to: &Path) {
         }
     }
 }
+
+#[test]
+fn the_calls_are_golden() {
+    let (out, err, ok) = kagviz(&["show", SESSION, "--calls"]);
+    assert!(ok, "{err}");
+    check("fixture-0001.calls.json", &out);
+}
+
+/// The calls are the events' payload half, and the join is the contract.
+///
+/// One entry per `tool` event across both tiers, joined by `tool_use_id`,
+/// and the two sizes the events carry are the lengths of the two things the
+/// calls carry. Those hold by construction — both documents are filled from
+/// the same block in the same iteration — so this test is here to catch that
+/// construction being taken apart, which is exactly how it would break.
+#[test]
+fn every_tool_event_has_its_text_and_the_sizes_agree() {
+    let (events_json, _, ok) = kagviz(&["show", SESSION, "--events"]);
+    assert!(ok);
+    let (calls_json, _, ok) = kagviz(&["show", SESSION, "--calls"]);
+    assert!(ok);
+    let events: serde_json::Value = serde_json::from_str(&events_json).unwrap();
+    let calls: serde_json::Value = serde_json::from_str(&calls_json).unwrap();
+
+    // Both tiers, flattened the way the calls document flattens them.
+    let mut tools: Vec<&serde_json::Value> = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "tool")
+        .collect();
+    for spawn in events["spawns"].as_array().unwrap() {
+        tools.extend(
+            spawn["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|e| e["kind"] == "tool"),
+        );
+    }
+    let list = calls["calls"].as_array().unwrap();
+    assert_eq!(
+        list.len(),
+        tools.len(),
+        "one calls entry per tool event, spawns included"
+    );
+    assert!(
+        tools.iter().any(|e| e["phase"].is_null()),
+        "the fixture must keep a spawn in this join, or it proves only the parent"
+    );
+
+    for event in &tools {
+        let id = event["id"].as_str().expect("the fixture ids every call");
+        let call = list
+            .iter()
+            .find(|c| c["id"] == event["id"])
+            .unwrap_or_else(|| panic!("no calls entry for {id}"));
+        assert_eq!(call["tool"], event["tool"], "{id}");
+
+        // `input_bytes` *is* the canonical serialization's length, so the
+        // input the calls document carries has to re-serialize to it.
+        assert_eq!(
+            call["input"].is_null(),
+            event["input_bytes"].is_null(),
+            "{id}: an input and its size are present together or not at all"
+        );
+        if !call["input"].is_null() {
+            assert_eq!(
+                serde_json::to_string(&call["input"]).unwrap().len() as u64,
+                event["input_bytes"].as_u64().unwrap(),
+                "{id}"
+            );
+        }
+
+        // And the reading that matters most: absent is absent. An
+        // interrupted call has no `result` key, not an empty one.
+        assert_eq!(
+            call["result"].is_null(),
+            event["result_bytes"].is_null(),
+            "{id}: a result and its size are present together or not at all"
+        );
+        if !call["result"].is_null() {
+            assert_eq!(
+                call["result"].as_str().unwrap().len() as u64,
+                event["result_bytes"].as_u64().unwrap(),
+                "{id}"
+            );
+        }
+    }
+}
+
+/// The disclosure boundary, as a test.
+///
+/// `derive` writes no calls document; `derive --calls` writes it and the
+/// index links it; `derive --drop-calls` takes it back off. This is the one
+/// thing in the derived tree that is a decision rather than a consequence,
+/// and the state machine behind it is easy to break in a way no other test
+/// would notice — most of all the `--calls`-after-a-plain-run case, which
+/// `state.json` alone would report as unchanged and skip.
+#[test]
+fn the_calls_document_is_written_only_when_asked_for() {
+    let live = manifest()
+        .join("target")
+        .join("golden-tests")
+        .join(format!("calls-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&live);
+    copy_tree(&root(), &live.join("kai").join("projects"));
+    let arg = live.to_str().unwrap();
+    let derived = live.join("derived");
+    let calls = derived
+        .join("calls")
+        .join("kai")
+        .join(format!("{SESSION}.json"));
+    let row_calls = || -> serde_json::Value {
+        let raw = fs::read_to_string(derived.join("sessions.json")).unwrap();
+        serde_json::from_str::<serde_json::Value>(&raw).unwrap()["sessions"][0]["calls"].clone()
+    };
+
+    let (_, err, ok) = kagviz_at(&root(), &["derive", "--live", arg], None);
+    assert!(ok, "{err}");
+    assert!(!calls.is_file(), "a plain derive must write no call text");
+    assert!(
+        row_calls().is_null(),
+        "and the index must not link a document that is not there"
+    );
+
+    // The trap: same bytes, same kagviz, so `state.json` says unchanged. The
+    // run must still notice that an output it was asked for is missing.
+    let (_, err, ok) = kagviz_at(&root(), &["derive", "--live", arg, "--calls"], None);
+    assert!(ok, "{err}");
+    let (expected, _, _) = kagviz(&["show", SESSION, "--calls"]);
+    assert_eq!(
+        fs::read_to_string(&calls).unwrap(),
+        expected,
+        "derive --calls writes the bytes show --calls prints"
+    );
+    assert_eq!(row_calls(), format!("calls/kai/{SESSION}.json"));
+
+    // A later plain run leaves it alone — `derived/` is regenerable, and a
+    // run that was not asked about call text does not get to decide about it.
+    let (_, err, ok) = kagviz_at(&root(), &["derive", "--live", arg], None);
+    assert!(ok, "{err}");
+    assert!(calls.is_file(), "a plain derive must not silently drop it");
+    assert_eq!(row_calls(), format!("calls/kai/{SESSION}.json"));
+
+    // Asking is the only way in, and asking is the only way back out.
+    let (_, err, ok) = kagviz_at(&root(), &["derive", "--live", arg, "--drop-calls"], None);
+    assert!(ok, "{err}");
+    assert!(!calls.is_file(), "--drop-calls removes it");
+    assert!(row_calls().is_null(), "and the index un-links it");
+    let _ = fs::remove_dir_all(&live);
+}

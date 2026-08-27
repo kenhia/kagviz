@@ -1,18 +1,19 @@
 # `web/` — the app over the facts
 
-A static single-page app that reads the same three documents kagviz emits —
-`sessions.json`, the facts and the events — and nothing else. No backend: it is
-HTML, CSS and JS copied next to the data.
+A static single-page app that reads the same four documents kagviz emits —
+`sessions.json`, the facts, the events and the calls — and nothing else. No
+backend: it is HTML, CSS and JS copied next to the data.
 
 Sprint 011 built the skeleton, the contracts and the session browser; sprint
-012 added the timeline's pan, zoom and click. The static report is unchanged
-and stays; this does not replace it.
+012 added the timeline's pan, zoom and click; sprint 015 opened a tool row
+into what the call actually said. The static report is unchanged and stays;
+this does not replace it.
 
 ## Reading the code
 
 | path                        | what                                                                                                                                                     |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/lib/contract/`         | the three documents in TypeScript, plus the decoders and the derived helpers. `conformance.spec.ts` is what makes it a contract — see below.             |
+| `src/lib/contract/`         | the four documents in TypeScript, plus the decoders and the derived helpers. `conformance.spec.ts` is what makes it a contract — see below.              |
 | `src/lib/data.ts`           | where the documents are fetched from, and what a failure says.                                                                                           |
 | `src/lib/timeline.ts`       | the timeline's geometry — track, resolution, columns, bands, ticks, hit-testing. Pure, so all of it is testable. Supersedes 011's `strip.ts`.            |
 | `src/lib/segment.ts`        | what a click resolves to, and the merge of the events with the facts' prompts and questions — the only place the app reads two documents for one answer. |
@@ -65,6 +66,33 @@ listener per rect — and nothing focusable per column, which would be worse for
 a keyboard than the `role="application"` container. And `ticks()` takes the
 window rather than generating every tick and filtering, which was two million
 objects a frame at leaf zoom.
+
+## Opening a call (sprint 015)
+
+The calls document is the payload tier: what each tool call said, and what
+came back. It is **the one document a tree may legitimately not have** —
+`derive` writes it only when asked, because it is the transcript's own text
+rather than something counted from it — and that shapes how the app reads it.
+
+**Nothing fetches it until a reader opens a call.** Not with the events, not
+on page load. It is ~4.5× the events at the median (204 KB against 42 KB), and
+most trees carry none at all, so a reader who never opens a call pays nothing.
+
+**The index is what answers "is there any", not a 404.** The first open costs
+two fetches: `sessions.json`, whose `calls` link is the contract's own signal,
+and then the document. The path was always guessable; what the index answers
+is whether there is anything at it. Reading a missing file as "this tree has
+no call text" would conflate the deliberate default with a derive that
+half-finished — the same unknown-rendered-as-a-zero the facts refuse.
+
+**What the panel shows is fenced and labelled**, because it is the first thing
+in this app that was never counted. Rendered as text: monospace, wrapped, no
+markdown, no HTML, no highlighting — a tool result is arbitrary bytes and
+deciding what it "is" goes wrong on a shared screen. And the three absences
+the contract keeps apart stay apart on screen: an interrupted call says so
+rather than drawing an empty box; an offloaded result says what it is a
+preview _of_; a result that was only an image says that instead of nothing.
+Over the corpus those are 58, 19 and 4,672 calls — none of them theoretical.
 
 ## The three decisions sprint 011 made
 
@@ -152,9 +180,13 @@ VITE_KAGVIZ_DERIVED=https://kai.encke-wahoo.ts.net:8027/kagviz/ just web-dev
 
 ## What is deliberately not here
 
-- **A transcript viewer.** The segment panel shows what happened — turns,
-  calls, durations, sizes, files — not what was said inside them. The events
-  document says the same where it lists what it does not carry.
+- **A transcript viewer.** Sprint 015 narrowed this rather than removing it: a
+  tool row opens into that call's own input and result, and nothing more. The
+  panel still shows what happened — turns, calls, durations, sizes, files —
+  and there is no view of the session's text as a document, no search across
+  it, and no rendering of it as anything but text. The events document still
+  carries no payloads; the calls document does, beside it, and only when the
+  tree was derived with `--calls`.
 - **Zoom and pan in the hash.** Only the _selection_ is deep-linked; arriving
   with one frames it. A link that pinned a scroll offset would break the moment
   the window was a different width.

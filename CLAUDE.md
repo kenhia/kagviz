@@ -111,9 +111,9 @@ surface for any change to a document or the page.
   before touching the extractor.** It is field-derived, not documented
   upstream, and the format drifts between CLI releases.
 - `docs/facts-contract.md` — the JSON `show --json` emits, and the rules for
-  changing it — plus the two documents under the same rules, `sessions.json`
-  and the events document (`show --events`). **Read this before adding or
-  renaming a field** — and note what the events do *not* promise: per phase,
+  changing it — plus the three documents under the same rules, `sessions.json`,
+  the events document (`show --events`) and, since 015, the calls document
+  (`show --calls`). **Read this before adding or renaming a field** — and note what the events do *not* promise: per phase,
   `tool_calls` and `output_tokens` add up, `tool_failures` does not. The facts
   count a failure where its result came back and an event carries `failed` on
   the call, so a call whose result crossed the boundary lands on one side and
@@ -164,6 +164,24 @@ surface for any change to a document or the page.
 - **`null` is not `default`.** `#[serde(default)]` covers an absent field, not
   a present `null` — and a rejected field takes the whole record with it. Any
   typed non-`Option` field needs `deserialize_with = "null_as_default"`.
+- **Every size kagviz emits is UTF-8 bytes; `String.length` is UTF-16 code
+  units.** They agree on ASCII and part company everywhere else — 6,093 of
+  11,819 corpus tool results disagree. A JS consumer measures with
+  `utf8Length` (`web/src/lib/contract/decode.ts`), never `.length`. Found in
+  015 by running the app's decoders over a real derived tree *after* the
+  conformance test had passed, because the fixture had no non-ASCII byte in
+  it. It has one now and the suite asserts it still does. The general lesson
+  is the one 012 paid for too: **a fixture that cannot express the failure
+  makes the test unfalsifiable**, and the test will pass and mean nothing.
+- **The calls document is off by default, and that is a contract not a
+  setting.** `derive --calls` writes `calls/`; a plain run does not, and
+  `--drop-calls` puts a tree back. It is the only document carrying text
+  kagviz did not count — raw session content — so the flag *is* the
+  disclosure decision. `sessions.json` links `calls` only where a file
+  exists, and **that** is how a consumer knows, never a 404. There is no
+  redactor on purpose: a scanner that catches 51 shapes and misses the 52nd
+  manufactures false confidence. `just demo` reports a *floor* instead — a
+  claim about the scanner, not about the text. See sprint 015.
 - **The renderer reads the facts, never the transcript.** If you find yourself
   wanting a value the facts do not carry, add it to the facts. The index
   (`sessions.json`, `index.html`) reads the facts files the same way — and is
@@ -205,3 +223,9 @@ surface for any change to a document or the page.
   is also why this one is easy to skip); (8) the corpus sweep, to prove the
   change additive
   (or to measure it, if it is not).
+
+  Since 015 there is a ninth for anything a *consumer* displays: the calls
+  document and `web/src/lib/calltext.ts`. Presentation rules that the contract
+  cares about — absent is not empty, a non-text result is not an empty one, a
+  preview is not the output — live in that pure module and are tested there,
+  because a rule that lives in markup is a rule nothing tests.

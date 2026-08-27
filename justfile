@@ -107,7 +107,10 @@ collect-run:
 # so there is no LAN path to kagviz. `demo` builds a curated tree out of the
 # live mirror and serves it on this host's LAN address — the path a machine
 # that is not on the tailnet (kwork, a Teams screen-share) can actually reach.
-# It selects and serves; it does not audit. Pick what you show and look first.
+# It selects and serves; it does not clear. Pick what you show and look first —
+# it reports an exposure floor over the served tree, which is a claim about the
+# scanner and never about the text. `--calls` adds the tool calls' own input
+# and result text; off by default in this tree exactly as in the served one.
 
 # Build a curated tree and serve it on the LAN (default corpus: kagviz's own)
 demo *args: build-release

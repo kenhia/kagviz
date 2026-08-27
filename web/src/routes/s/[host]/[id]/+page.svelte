@@ -12,6 +12,14 @@
   is drawn before they land, and the timeline itself is drawn at the facts'
   own resolution until they do. The page is never blocked on the big file.
 
+  **A third, fetched only if asked for.** The calls document — what each tool
+  call said — is bigger again (190 KB at the median against the events' 42 KB)
+  and most trees do not carry it at all, because `derive` writes it only when
+  asked. So nothing here touches it until a reader opens a call, and then it
+  costs two fetches: `sessions.json`, whose `calls` link is the contract's own
+  answer to "does this tree have any", and the document itself. A reader who
+  never opens a call pays for neither.
+
   **The selection lives in the hash**, so a view can be pasted into korg:
   `#/s/<host>/<id>?phase=3`, or `?span=0&from=120&to=150` for a window. It is
   read on arrival and the timeline frames it.
@@ -24,9 +32,17 @@
 	import Written from '$lib/components/Written.svelte';
 	import type { Facts } from '$lib/contract/facts.js';
 	import type { EventsDocument } from '$lib/contract/events.js';
+	import type { CallsDocument } from '$lib/contract/calls.js';
 	import { toolFailureRate, dominantPhase, totalToolFailures } from '$lib/contract/derived.js';
 	import { fromQuery, toQuery, type Selection } from '$lib/segment.js';
-	import { loadFacts, loadEventsProgressively, reportUrl, type Progress } from '$lib/data.js';
+	import {
+		loadFacts,
+		loadEventsProgressively,
+		loadCalls,
+		loadSessions,
+		reportUrl,
+		type Progress
+	} from '$lib/data.js';
 	import { bytes, count, duration, percent, stamp } from '$lib/format.js';
 
 	const host = $derived(page.params.host ?? '');
@@ -41,8 +57,45 @@
 	let eventsSize = $state<number | undefined>(undefined);
 	let eventsError = $state<string | undefined>(undefined);
 
+	let calls = $state<CallsDocument | undefined>(undefined);
+	let callsState = $state<'unasked' | 'loading' | 'ready' | 'absent' | 'error'>('unasked');
+	let callsError = $state<string | undefined>(undefined);
+
 	let selection = $state<Selection | undefined>(undefined);
 	let frame = $state<Selection | undefined>(undefined);
+
+	/**
+	 * Fetch the payload tier, once, because a reader asked to read a call.
+	 *
+	 * The index first, and not to find the path — that is
+	 * `calls/<host>/<id>.json` and always has been. It is to find out whether
+	 * there is one: `sessions.json` links `calls` only where `derive` was
+	 * asked to write it, so its absence is the contract's own way of saying
+	 * this tree carries no call text. Guessing the path and reading a 404 as
+	 * "none" would conflate that with a tree whose derive half-finished.
+	 */
+	async function openCalls() {
+		if (callsState !== 'unasked') return;
+		const [h, i] = [host, id];
+		callsState = 'loading';
+		callsError = undefined;
+		try {
+			const index = await loadSessions();
+			const entry = index.sessions.find((e) => e.host === h && e.session_id === i);
+			if (!entry?.calls) {
+				callsState = 'absent';
+				return;
+			}
+			const doc = await loadCalls(h, i);
+			// The session may have changed under a slow fetch.
+			if (h !== host || i !== id) return;
+			calls = doc;
+			callsState = 'ready';
+		} catch (e) {
+			callsError = e instanceof Error ? e.message : String(e);
+			callsState = 'error';
+		}
+	}
 
 	$effect(() => {
 		const [h, i] = [host, id];
@@ -52,6 +105,9 @@
 		events = undefined;
 		eventsError = undefined;
 		eventsSize = undefined;
+		calls = undefined;
+		callsState = 'unasked';
+		callsError = undefined;
 		progress = { read: 0 };
 		loadFacts(h, i)
 			.then((f) => {
@@ -243,7 +299,16 @@
 	{/if}
 
 	{#if selection && events}
-		<Segment {facts} {events} {selection} onclear={() => (selection = undefined)} />
+		<Segment
+			{facts}
+			{events}
+			{selection}
+			onclear={() => (selection = undefined)}
+			{calls}
+			{callsState}
+			{callsError}
+			onopencalls={openCalls}
+		/>
 	{/if}
 
 	<Panels

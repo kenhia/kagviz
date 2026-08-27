@@ -5,10 +5,12 @@ count about a session. It is the **only** input the renderer takes, and it is
 the seam the front-end plugs into — typed in `web/src/lib/contract/` since
 sprint 011, with a conformance test over `tests/golden/` that runs inside
 `just check`, so a change here that breaks a consumer fails the build on this
-side of the seam. Two more documents live
+side of the seam. Three more documents live
 under the same rules and are described at the end: `sessions.json`, the index
-a consumer reads *first*, and the [events document](#the-events-document),
-the detail tier it reads *last*.
+a consumer reads *first*; the [events document](#the-events-document), the
+detail tier it reads *last*; and the [calls document](#the-calls-document),
+the payload tier under *that* — the only one kagviz does not write by
+default, because it is the only one carrying text it did not count.
 
 Treat it as a contract:
 
@@ -577,7 +579,7 @@ document kagviz emits changed a byte. What changed is what the text promises.
 | turn: `model`, `tokens`, `tools` | The turn's model and usage (absent when the record carried none), and how many `tool` events follow it. |
 | tool: `tool`, `class`, `id` | The tool's name; how the phase mix classified it — `read`, `edit`, `run`, `org`, `ask`, `delegate`, `other`, the same table `mix` uses; and the `tool_use` id, for joining back to the raw transcript. |
 | tool: `input_bytes` | The call's input re-serialized compactly with sorted keys — a canonical size, not the on-disk one. |
-| tool: `result_at`, `failed`, `result_bytes` | When the result was recorded; whether it came back `is_error` (present only when true); UTF-8 bytes of the result's text as the model was handed it. All three **absent** when no result arrived — an interrupted call, or one still running when the transcript ends. An offloaded result (`<persisted-output>`) counts its placeholder and preview, which is what the model saw; the harness's own `persistedOutputSize` is not carried yet. |
+| tool: `result_at`, `failed`, `result_bytes` | When the result was recorded; whether it came back `is_error` (present only when true); UTF-8 bytes of the result's text as the model was handed it. All three **absent** when no result arrived — an interrupted call, or one still running when the transcript ends. An offloaded result (`<persisted-output>`) counts its placeholder and preview, which is what the model saw; the harness's own `persistedOutputSize` is not carried here — since 015 it is the calls document's `persisted_bytes`, beside the preview it is the size of. |
 | tool: `files`, `lines_added`, `lines_deleted`, `opaque` | The call's file changes, under exactly the facts' two states. `files` are named when the result named them (absent when empty); the line counts are present when a diff was read and **absent** when not; `opaque` is present and true when this call is one of `changes.opaque_edits`. A shell call is opaque from the moment it is made — an interrupted one leaves no result and is still an edit kagviz cannot see. |
 | `spawns[]` | One per `delegation.spawns[]`, same order, each with its `agent_id` and its own events. |
 
@@ -592,7 +594,149 @@ do not reproduce: it counts every timestamped record, `system` and snapshot
 records included, and those carry nothing worth an event.
 
 Not carried, deliberately: prompt and question text (the facts have them);
-tool inputs and outputs themselves (the transcript has them, and this
-document would be the transcript again); `system` records, hook summaries
-and API errors (see `transcript-format.md`, "what else is recoverable" —
-additive when wanted).
+`system` records, hook summaries and API errors (see
+`transcript-format.md`, "what else is recoverable" — additive when wanted).
+
+Tool inputs and outputs are not carried **here** either, for the reason this
+document originally gave — "this document would be the transcript again" —
+but since sprint 015 they are carried in a fourth document beside it. The
+argument that split the events off the facts, one level further down: the
+payloads are ~4.5× the events at the median, and a consumer that only wants
+the timeline must not pay for them. See [the calls document](#the-calls-document).
+
+The one field this document still does not carry about an offloaded result
+is `persistedOutputSize` — and *that* moved too: it is the calls document's
+`persisted_bytes`, beside the preview it is the size of.
+
+## The calls document
+
+Added in sprint 015. **A fourth contract**, and the payload tier under the
+events: `kagviz show <id> --calls` emits it, `kagviz derive --calls` writes it
+to `derived/calls/<host>/<id>.json`, and `sessions.json` links it as `calls`
+when the tree carries one. It holds what each tool call actually said — its
+input, and the result text as the model was handed it — joined to the events
+by `tool_use_id`.
+
+The same rules apply: adding a field is not a breaking change, changing or
+removing one is, an optional field is absent and never `null`, and nothing
+here is inferred. What is different is one thing, and it is the whole reason
+this document was a decision rather than a feature.
+
+### It is the one document kagviz does not write by default
+
+Everything else under `derived/` is *counted from* the transcript — counts,
+durations, classifications, prompt previews capped at 80 characters. This is
+the transcript's own text: file contents, command output, pasted material,
+and potentially credentials. The mirrors it comes from are not served at all.
+
+So `derive` writes it only when asked. **The flag is the decision**, and that
+is deliberate: `collect/demo.sh` runs a bare `kagviz derive`, so a
+default-on calls document would put raw session content on a demo's LAN
+address without anyone having chosen to. A tree with no `calls/` is the
+default state; `derive --drop-calls` puts a tree back into it.
+
+There is no redactor, and that is also a decision rather than an omission.
+Over the live mirror, ~51 of 90,182 payloads are plausibly-live credentials,
+touching 59 of 413 sessions — but a scanner that catches 51 and misses the
+52nd manufactures false confidence, which is the same unknown-rendered-as-a-
+zero this contract forbids everywhere else. A redactor's clean pass is a
+claim about the text; the demo pre-check's floor-report is a claim about the
+scanner, which is the only one of the two that can be true. See sprint 015.
+
+### Shape
+
+**Flat, and joined by id.** The session's own calls and every spawn's are one
+list: `tool_use` ids are unique across a session, so a consumer expanding a
+delegated agent's row joins exactly as it does the parent's. Mirroring the
+events' `spawns[]` split would force a consumer to know which tier a row came
+from before it could look up the text.
+
+```json
+{ "session_id": "63a9b83b-…",
+  "calls": [
+    { "id": "toolu_…", "tool": "Edit",
+      "input": { "file_path": "/home/ken/src/x/sync.sh", "old_string": "…", "new_string": "…" },
+      "result": "The file /home/ken/src/x/sync.sh has been updated successfully." },
+    { "id": "toolu_…", "tool": "Bash",
+      "input": { "command": "bats tests/", "description": "Run the tests" },
+      "result": "Exit code 1\nnot ok 1 dry run copies nothing" },
+    { "id": "toolu_…", "tool": "Read",
+      "input": { "file_path": "/home/ken/shot.png" },
+      "result": "", "result_blocks": ["image"] },
+    { "id": "toolu_…", "tool": "PowerShell",
+      "input": { "command": "…" },
+      "result": "<persisted-output>\nOutput too large (222.2KB)…",
+      "persisted": true, "persisted_bytes": 227547 } ] }
+```
+
+| Field | Meaning |
+|---|---|
+| `calls[]` | One entry per `tool` event across the events document's own tier **and** all of its spawns: the session's tier first, in the order the calls were made, then each spawn in `delegation.spawns[]` order. Record order, not the events' time order — this document is joined, never read positionally. |
+| `id` | The `tool_use` id: the join key back to the events. **Absent** when the transcript carried none, and then the entry cannot be joined to anything — it is still here so the document does not under-report the calls that were made. |
+| `tool` | The tool's name. Duplicated from the event so an entry with no `id` is not nameless and so the document reads on its own under `jq`. Read off the same block in the same iteration, so the two cannot disagree. |
+| `input` | The call's input, as JSON, exactly as the model was handed it. **Absent** when the block carried none — and then so is the event's `input_bytes`. |
+| `result` | The result's text as the model was handed it: the string form, or the `text` blocks of the array form concatenated in order. **Absent** when no result arrived — an interrupted call, or one still running when the transcript ends. Present and **empty** when a result arrived carrying no text. Those are different readings and this document keeps them apart. |
+| `result_blocks` | Block types in the result that carried no text, in order — `tool_reference`, `image`. Present only when there were any. It is what stops an empty `result` from having to be read as an empty result: a screenshot is `result: ""` plus `result_blocks: ["image"]`. |
+| `persisted`, `persisted_bytes` | The harness judged the output too large for the context, offloaded it to `<session-id>/tool-results/<id>.txt`, and handed the model a path and a ~2 KB preview: `result` **is that preview, not the output**. Read from the harness's own `toolUseResult.persistedOutputPath`, never by matching the shape of the text. `persisted` is present only when true; `persisted_bytes` is what the harness recorded as the real size, and is **absent** when it recorded a path but no size — an unknown, not a zero. The offloaded file itself is not served. |
+
+**The invariants, and why they hold.** Both documents are filled from the same
+block in the same iteration of the same `Counter`, so these are true by
+construction rather than by assertion:
+
+- One `calls[]` entry per `tool` event, spawns included.
+- `to_string(input).len()` **is** the event's `input_bytes` — that is how
+  `input_bytes` is computed.
+- `result.len()` **is** the event's `result_bytes`.
+- `result` is present exactly when the event's `result_bytes` is, and `input`
+  exactly when `input_bytes` is.
+
+**Every size in every document kagviz emits is UTF-8 bytes**, because Rust's
+`str::len()` is. That is worth stating here rather than assuming, because the
+second consumer is JavaScript and `String.length` counts UTF-16 code units:
+the two agree on ASCII and part company everywhere else. Measured over the
+pinned corpus, **6,093 of 11,819 tool results** have a `String.length` that is
+not their `result_bytes`. A JS consumer must measure with a `TextEncoder`;
+`web/src/lib/contract/decode.ts` exports `utf8Length` for it.
+
+This was found by running the app's own decoders over a real derived tree,
+*after* the conformance test over the fixture had passed — the fixture had not
+one non-ASCII byte in it, so `.length` was right there and wrong in the wild.
+The fixture now carries an em-dash and a `µ` in a tool result, and the
+conformance suite asserts that it still does: a test that cannot fail is not
+a test, and the same lesson cost sprint 012 a wrong sentence in this document.
+
+Measured over the pinned corpus — 405 sessions, **45,394 calls**: no
+disagreement on any of them. That sweep is also what says the rare branches
+are real rather than theoretical:
+
+| | |
+|---|---|
+| calls with a result | 45,336 |
+| **interrupted** — `result` absent, not empty | **58** |
+| offloaded (`persisted`) | 19, every one with a size |
+| calls with no `tool_use` id | 0 |
+| **non-text result blocks** | **4,672** — `tool_reference` 4,424, `image` 248 |
+
+Every one of those 4,672 would otherwise be an empty string with nothing to
+say why, and each of the 58 would be an empty box that reads as an empty
+result. Those two rows are the entire argument for `result_blocks` existing
+and for `result` being absent rather than `""`.
+
+The document itself, per session: median **204 KB**, p90 594 KB, max 4.5 MB,
+**114 MB** over the corpus — against the ~190 KB median and 103 MB the
+proposal projected from the raw payload bytes before any of this was built.
+
+**What a consumer does with it.** Fetch it lazily, per session, on the first
+expand — never with the events. It is ~4.5× the events at the median (190 KB
+against 42 KB), and a consumer that only wants the timeline must not pay for
+it. `sessions.json` carries `calls` only when the tree has one, so the
+absence of that field is the signal: offer to open a call's text only where
+there is text to open.
+
+**Not carried, deliberately:** the offloaded `tool-results/*.txt` files
+themselves (46 files, 4.1 MB over the corpus) — `result` carries the
+placeholder the model was actually handed, which is the honest thing, and
+`persisted_bytes` says how much of the real output it stands for. Also not
+carried: `persistedOutputPath`, which points into a tree that is not served
+and on a Windows-written transcript is a local `C:\Users\…` path meaning
+nothing to a reader.

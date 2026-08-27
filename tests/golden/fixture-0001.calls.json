@@ -1,0 +1,202 @@
+{
+  "session_id": "fixture-0001",
+  "calls": [
+    {
+      "id": "t1",
+      "tool": "Read",
+      "input": {
+        "file_path": "/home/ken/src/example/sync.sh"
+      },
+      "result": "     1\t#!/usr/bin/env bash\n     2\tset -eu\n     3\trsync -a src/ dest/\n"
+    },
+    {
+      "id": "t2",
+      "tool": "Grep",
+      "input": {
+        "path": "/home/ken/src/example",
+        "pattern": "rsync"
+      },
+      "result": "Found 1 file\nsync.sh"
+    },
+    {
+      "id": "t3",
+      "tool": "Bash",
+      "input": {
+        "command": "grep -n rsync sync.sh",
+        "description": "Find the rsync line — grep -n"
+      },
+      "result": "3:rsync -a src/ dest/  — 1 match, 100µs"
+    },
+    {
+      "id": "t4",
+      "tool": "Edit",
+      "input": {
+        "file_path": "/home/ken/src/example/sync.sh",
+        "new_string": "DRY=${DRY_RUN:+--dry-run}\nrsync -a $DRY src/ dest/",
+        "old_string": "rsync -a src/ dest/"
+      },
+      "result": "The file /home/ken/src/example/sync.sh has been updated successfully."
+    },
+    {
+      "id": "t5",
+      "tool": "Write",
+      "input": {
+        "content": "#!/usr/bin/env bats\n@test \"dry run copies nothing\" {\n  run env DRY_RUN=1 ./sync.sh\n  [ \"$status\" -eq 0 ]\n}",
+        "file_path": "/home/ken/src/example/tests/dry_run.bats"
+      },
+      "result": "File created successfully at: /home/ken/src/example/tests/dry_run.bats"
+    },
+    {
+      "id": "t6",
+      "tool": "Bash",
+      "input": {
+        "command": "bats tests/",
+        "description": "Run the tests"
+      },
+      "result": "Exit code 1\nnot ok 1 dry run copies nothing\n# (in test file tests/dry_run.bats, line 4)"
+    },
+    {
+      "id": "t7",
+      "tool": "AskUserQuestion",
+      "input": {
+        "questions": [
+          {
+            "header": "Flag",
+            "multiSelect": false,
+            "options": [
+              {
+                "description": "long form, self-describing",
+                "label": "--dry-run"
+              },
+              {
+                "description": "matches rsync",
+                "label": "-n"
+              }
+            ],
+            "question": "Keep the flag name --dry-run or use -n?"
+          }
+        ]
+      },
+      "result": "User has answered your questions: \"Keep the flag name --dry-run or use -n?\"=\"--dry-run\". You can now continue with the user's answers in mind."
+    },
+    {
+      "id": "t8",
+      "tool": "Skill",
+      "input": {
+        "args": "wip",
+        "skill": "commit"
+      }
+    },
+    {
+      "id": "t9",
+      "tool": "Bash",
+      "input": {
+        "command": "git add -A && git commit -m 'wip: dry-run flag'",
+        "description": "Commit the work in progress"
+      }
+    },
+    {
+      "id": "t10",
+      "tool": "Agent",
+      "input": {
+        "description": "Find other scripts with flags",
+        "prompt": "List every script under src/ that parses command-line flags.",
+        "subagent_type": "Explore"
+      },
+      "result": "Two scripts parse flags: src/sync.sh and src/backup.sh."
+    },
+    {
+      "id": "t11",
+      "tool": "Agent",
+      "input": {
+        "description": "Plan the backup.sh change",
+        "prompt": "Propose how backup.sh should take the same flag.",
+        "subagent_type": "Plan"
+      },
+      "result": "Agent launched in the background."
+    },
+    {
+      "id": "t12",
+      "tool": "mcp__kaed-kai__edit",
+      "input": {
+        "edits": [
+          {
+            "anchor": "set -eu",
+            "replace": "set -euo pipefail\ntrap 'echo failed' ERR"
+          }
+        ],
+        "path": "example/src/sync.sh",
+        "root": "kai:src"
+      },
+      "result": "{\"applied\":true,\"diff\":\"--- a/src/sync.sh\\n+++ b/src/sync.sh\\n@@ -1,3 +1,4 @@\\n #!/usr/bin/env bash\\n-set -eu\\n+set -euo pipefail\\n+trap 'echo failed' ERR\\n rsync\\n\",\"files\":[{\"path\":\"src/sync.sh\",\"new_version\":\"v2\"}],\"txn_id\":7}"
+    },
+    {
+      "id": "t13",
+      "tool": "mcp__kaed-kai__edit",
+      "input": {
+        "edits": [
+          {
+            "anchor": "## Usage",
+            "replace": "## Usage\n\n`DRY_RUN=1 ./sync.sh` copies nothing."
+          }
+        ],
+        "path": "example/README.md",
+        "root": "kai:src"
+      },
+      "result": "{\"applied\":true,\"files\":[{\"path\":\"README.md\"}],\"txn_id\":8}"
+    },
+    {
+      "id": "t14",
+      "tool": "mcp__korg__update_work_item",
+      "input": {
+        "wi_number": 4242,
+        "wi_status": "resolved"
+      },
+      "result": "{\"wi_number\":4242,\"wi_status\":\"resolved\"}"
+    },
+    {
+      "id": "t15",
+      "tool": "Bash",
+      "input": {
+        "command": "find src -name '*.sh' -exec ls -l {} +",
+        "description": "List every script"
+      },
+      "result": "<persisted-output>\nOutput too large (3MB). Full output saved to: /home/ken/.claude/projects/-home-ken-src-example/fixture-0001/tool-results/abc123.txt\n\nPreview (first 2KB):\nsrc/a.sh\nsrc/b.sh\nsrc/backup.sh\nsrc/sync.sh\n</persisted-output>",
+      "persisted": true,
+      "persisted_bytes": 3145728
+    },
+    {
+      "id": "t16",
+      "tool": "Read",
+      "input": {
+        "file_path": "/home/ken/src/example/src/backup.sh"
+      },
+      "result": "     1\t#!/usr/bin/env bash\n     2\ttar czf backup.tgz src/\n"
+    },
+    {
+      "id": "s1",
+      "tool": "Glob",
+      "input": {
+        "pattern": "src/**/*.sh"
+      },
+      "result": "src/a.sh\nsrc/b.sh\nsrc/backup.sh\nsrc/sync.sh"
+    },
+    {
+      "id": "s2",
+      "tool": "Grep",
+      "input": {
+        "path": "/home/ken/src/example/src",
+        "pattern": "getopts"
+      },
+      "result": "Error: path does not exist"
+    },
+    {
+      "id": "s3",
+      "tool": "Read",
+      "input": {
+        "file_path": "/home/ken/src/example/src/backup.sh"
+      },
+      "result": "     1\t#!/usr/bin/env bash\n     2\ttar czf backup.tgz src/\n"
+    }
+  ]
+}

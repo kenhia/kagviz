@@ -672,21 +672,31 @@ fn file_changes(h: &mut String, s: &Summary) {
         rows.sort_by(|a, b| b.1.calls.cmp(&a.1.calls).then_with(|| a.0.cmp(b.0)));
         h.push_str("<ul class=\"sources\">\n");
         for (tool, t) in rows {
-            let detail = if t.opaque == t.calls {
-                "<span class=\"unseen\">no readable diff</span>".to_string()
-            } else {
-                format!(
-                    "{} file(s) <span class=\"add\">+{}</span> <span class=\"del\">−{}</span>{}",
+            // Assembled from what is known, not switched on `opaque ==
+            // calls`. That equality stood in for "this tool recovered
+            // nothing" until 013 gave a shell tool a third kind of call —
+            // one that provably wrote nothing, so it is neither readable nor
+            // opaque — and the proxy started rendering "0 file(s) +0/−0".
+            let mut parts: Vec<String> = Vec::new();
+            if t.files_touched > 0 || t.lines_added > 0 || t.lines_deleted > 0 {
+                parts.push(format!(
+                    "{} file(s) <span class=\"add\">+{}</span> <span class=\"del\">−{}</span>",
                     t.files_touched,
                     fmt::count(t.lines_added as u64),
                     fmt::count(t.lines_deleted as u64),
-                    if t.opaque > 0 {
-                        format!(" · <span class=\"unseen\">{} unreadable</span>", t.opaque)
-                    } else {
-                        String::new()
-                    },
-                )
-            };
+                ));
+            }
+            if t.opaque > 0 {
+                parts.push(if t.opaque == t.calls {
+                    "<span class=\"unseen\">no readable diff</span>".to_string()
+                } else {
+                    format!("<span class=\"unseen\">{} unreadable</span>", t.opaque)
+                });
+            }
+            if parts.is_empty() {
+                parts.push("<span class=\"unseen\">nothing written</span>".to_string());
+            }
+            let detail = parts.join(" · ");
             h.push_str(&format!(
                 "<li><span class=\"name\">{}</span><span class=\"n\">{}×</span>\
                  <span class=\"d\">{detail}</span></li>\n",

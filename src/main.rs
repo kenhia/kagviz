@@ -9,6 +9,7 @@ mod events;
 mod fmt;
 mod label;
 mod render;
+mod shell;
 mod summary;
 mod transcript;
 
@@ -441,22 +442,25 @@ fn show_session(root: &Path, id: &str, json: bool, events: bool, label: &LabelOp
         s.changes.opaque_edits
     );
     for (tool, c) in &s.changes.by_tool {
-        let seen = if c.opaque == c.calls {
-            format!("{} unreadable", c.opaque)
-        } else {
-            format!(
-                "{} file(s) +{}/-{}{}",
-                c.files_touched,
-                c.lines_added,
-                c.lines_deleted,
-                if c.opaque > 0 {
-                    format!(", {} unreadable", c.opaque)
-                } else {
-                    String::new()
-                }
-            )
-        };
-        println!("            {:>4}  {tool}  ({seen})", c.calls);
+        // Built up from what is actually known rather than switched on
+        // `opaque == calls`. That equality used to stand in for "this tool
+        // recovered nothing", and since 013 it no longer does: a shell tool
+        // can have calls that are neither readable nor opaque, because they
+        // provably wrote nothing.
+        let mut seen: Vec<String> = Vec::new();
+        if c.files_touched > 0 || c.lines_added > 0 || c.lines_deleted > 0 {
+            seen.push(format!(
+                "{} file(s) +{}/-{}",
+                c.files_touched, c.lines_added, c.lines_deleted
+            ));
+        }
+        if c.opaque > 0 {
+            seen.push(format!("{} unreadable", c.opaque));
+        }
+        if seen.is_empty() {
+            seen.push("nothing written".to_string());
+        }
+        println!("            {:>4}  {tool}  ({})", c.calls, seen.join(", "));
     }
     println!(
         "tokens    {} out ({} thinking), {} cache read",

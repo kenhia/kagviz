@@ -166,16 +166,28 @@
 					<li>
 						<span class="name">{tool}</span>
 						<span class="n">{t.calls}×</span>
+						<!--
+							Built from what is known rather than switched on
+							`opaque === calls`. That equality stood in for "this tool
+							recovered nothing" until sprint 013 gave a shell tool a
+							third kind of call — one that provably wrote nothing, so it
+							is neither readable nor opaque — and the proxy started
+							rendering "0 file(s) +0/−0". Mirrors `render.rs`.
+						-->
 						<span class="d">
-							{#if t.opaque === t.calls}
-								<span class="unseen">no readable diff</span>
-							{:else}
+							{#if t.files_touched > 0 || t.lines_added > 0 || t.lines_deleted > 0}
 								{t.files_touched} file(s)
 								<span class="add">+{count(t.lines_added)}</span>
 								<span class="del">−{count(t.lines_deleted)}</span>
 								{#if t.opaque > 0}
 									· <span class="unseen">{t.opaque} unreadable</span>
 								{/if}
+							{:else if t.opaque === t.calls}
+								<span class="unseen">no readable diff</span>
+							{:else if t.opaque > 0}
+								<span class="unseen">{t.opaque} unreadable</span>
+							{:else}
+								<span class="unseen">nothing written</span>
 							{/if}
 						</span>
 					</li>

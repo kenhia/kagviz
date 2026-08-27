@@ -111,7 +111,7 @@ unified-diff hunks, so per-file line deltas are exact. A `create` result has an
 empty patch and the whole file body in `content`, so its line count is the
 addition.
 
-Anything that edits through the **shell** — `sed`, a heredoc, a redirect —
+Anything that edits through the **shell** — `sed -i`, a heredoc, a redirect —
 leaves no recoverable diff at all. A session that did all its editing through
 `Bash` shows zero file changes unless that gap is surfaced. kagviz therefore
 reports `opaque_edits` beside the line deltas: a zero that means "nothing
@@ -120,6 +120,33 @@ readings, and conflating them makes the whole report untrustworthy.
 
 This matters more than it sounds. Under some agent instructions, shell editing
 is the *default*, so the undercount is systematic rather than occasional.
+
+**But most shell calls are not edits.** Until sprint 013 every `Bash` and
+`PowerShell` call was an `opaque_edit`, so the corpus figure of 21,805 "calls
+that could have changed files" *was* the shell-call count — and 6,430 of them
+are a `grep`, a `sed -n` or a `git status`. `src/shell.rs` now reads the
+command string and rules those out, which moves `opaque_edits` to 15,391
+without moving a single recovered number.
+
+It is an allow-list, and deliberately so: the error here is one-directional. A
+writer judged read-only becomes a zero that should have been an unknown — the
+one thing this project promises not to do — while a reader judged a writer
+costs only precision. So a command is read-only only when *every* simple
+command in it is a known non-writer, and anything unparseable stays opaque:
+command substitution, a heredoc, a subshell, a script block, an unterminated
+quote.
+
+Two things that audit found, worth carrying:
+
+- **A command-prefix wrapper allow-lists everything behind it.** `env` was on
+  the list until a second implementation of the same rule disagreed on one
+  call; eight corpus calls turned out to be `env -i … copilot`,
+  `env -u … just publish` and `env HOME=… cargo`, all judged read-only. `env`,
+  `command`, `sudo`, `timeout`, `nice`, `nohup`, `xargs` and their family are
+  now all off it.
+- **`2>&1` and `> /dev/null` are not writes.** Reading any `>` as a file write
+  left 6,118 read-only calls opaque in an earlier draft — they are the
+  overwhelming majority of `>` in the corpus.
 
 **MCP file servers carry their own diff, and it is recoverable.** Sprint 003
 added an adapter table for them. The measured shape (`mcp__kaed-*__edit`) is

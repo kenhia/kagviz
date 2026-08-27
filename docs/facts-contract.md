@@ -40,6 +40,7 @@ whether it is affected without re-deriving anything.
 | 005 | `active_secs` is redefined as the sum of the span lengths — see below. | 560,283s → **558,730s**; 305 of 405 sessions corrected, every one downward, worst −198s. |
 | 009 | Optional fields are **absent** instead of `null` — every `Option` the document carries: `opened_by`, `chosen`, `header`, `at`, a spawn's `agent_id`/`subagent_type`/`description`/`model`/`started`/`ended`, the top-level `session_id`/`project`/`cwd`/`git_branch`/`started`/`ended`. The contract had promised this since it was written; the serializer only kept it for `labels`. | Bytes change on **397 of 405** sessions; **no value moves**. What had been `null`: `opened_by` 1,971 times (resumed phases), `chosen` 6, `subagent_type` and `description` 5 each (unjoined spawns), `cwd`/`git_branch`/`started`/`ended` once each (one session with no timestamped record). |
 | 009 | `subagents` is the sorted **set** of subagent types invoked, one entry each — as `skills` already was. How many times is `tool_calls` and `delegation`'s job. | 8 of 405 sessions: 21 entries → 9 (`Explore,Explore` → `Explore`). |
+| 013 | `changes.opaque_edits` and `by_tool.<shell>.opaque` count only the shell calls whose **command string** could not be ruled out. A call is read-only when every simple command in it is a known non-writer and nothing in it can redirect to a file, substitute, or interpret; anything the tokenizer cannot split stays opaque. `by_tool.<shell>.calls` is unchanged — it is still every call, so the read-only share is the difference. | `opaque_edits` 21,821 → **15,391**; shell `opaque` 21,805 → **15,375** of the same 21,805 `calls` (29.5% judged read-only). **296 of 405** sessions. `files_touched`, `lines_added` and `lines_deleted` do not move — nothing became *recovered*, only known-empty. |
 | 013 | `assistant_turns`, `models`, every field of `tokens`, `phases[].output_tokens`, `activity…buckets[].output_tokens` and the delegated tier's equivalents count one **message** rather than one record. The harness writes one API message as one record per content block, all stamped with the same `usage`; see `transcript-format.md` trap 6. | `assistant_turns` 81,049 → **38,764** (+109.1% as counted), `tokens.output` 83,669,634 → **32,828,298** (+154.9%). Delegated: turns 1,720 → **603**, output 500,833 → **91,502**. **391 of 405** sessions. A message's tokens now land in the bucket and phase where it **opened**. |
 | 013 | `user_prompts`, `phases`, `user_involvement` and `activity…buckets[].user_turns` stop counting `<task-notification>` records — the harness reporting a finished background agent into the user channel, flagged by no `isMeta`. The discriminator is `origin.kind`; see `transcript-format.md` trap 7. | `user_prompts` 1,831 → **1,716** and `phases` 3,802 → **3,687**, both −115: every notification also cut a phase boundary. **49 of 405** sessions. `opened_by` moves on **0** of them — no session was opened by one, which is why the browse page never showed this. |
 
@@ -123,9 +124,22 @@ the shortfall is systematic rather than occasional.
 Read it precisely: it counts calls whose **line deltas** are unknown, which is
 not the same as calls kagviz learned nothing from. Four things land here:
 
-- Every `Bash` / `PowerShell` call, counted from the call rather than from a
-  result — an interrupted shell call leaves no result and is still an edit
-  kagviz cannot see.
+- A `Bash` / `PowerShell` call whose **command string could have written**,
+  counted from the call rather than from a result — an interrupted shell call
+  leaves no result and is still an edit kagviz cannot see.
+
+  Since 013 that is not every shell call. `src/shell.rs` reads the command and
+  a call is read-only only when *every* simple command in it is a known
+  non-writer and nothing in it redirects to a file, substitutes a command,
+  opens a subshell or script block, or feeds an interpreter — and anything the
+  tokenizer cannot split stays opaque. It is an **allow-list**, because the
+  error that matters here is one-directional: a writer judged read-only becomes
+  a zero that should have been an unknown, which is the one thing this document
+  promises never to do. A reader judged a writer costs only precision.
+
+  `by_tool.<shell>.calls` stays the **total**, so the share judged read-only is
+  visible as `calls - opaque` rather than taken on faith. That is the audit
+  surface for the allow-list, the same argument `by_tool` itself makes.
 - A file-editing MCP tool whose result no adapter could read.
 - A built-in editor (`Edit`, `Write`, `NotebookEdit`) whose result kagviz could
   not read **and which did not error**. A *failed* edit changed nothing and is
@@ -156,6 +170,13 @@ phase's `kind`. Without it, "+340 −88, and 51 unseen" has to be taken on faith
 `calls` is edit-capable calls of that tool; `opaque` is how many of them gave
 no readable **line counts**. Summing `by_tool` gives back `lines_added`,
 `lines_deleted` and `opaque_edits` exactly — there is a test.
+
+**Do not read `opaque == calls` as "this tool recovered nothing".** It was a
+safe proxy until 013, and is not one now: a shell tool can have calls that are
+neither readable nor opaque, because their command provably wrote nothing. The
+three renderers were all switching on that equality, and all three now assemble
+the line from what is known — `files_touched`/`lines_added`/`lines_deleted`
+first, the opaque count second, and "nothing written" when there is neither.
 
 A tool can show a non-zero `opaque` *and* an exact `files_touched`: that is the
 files-without-a-diff case above, and it is the reason `opaque` is not simply

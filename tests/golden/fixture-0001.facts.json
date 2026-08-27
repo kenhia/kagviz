@@ -56,14 +56,14 @@
     "files_touched": 4,
     "lines_added": 9,
     "lines_deleted": 2,
-    "opaque_edits": 5,
+    "opaque_edits": 4,
     "by_tool": {
       "Bash": {
         "calls": 4,
         "files_touched": 0,
         "lines_added": 0,
         "lines_deleted": 0,
-        "opaque": 4
+        "opaque": 3
       },
       "Edit": {
         "calls": 1,

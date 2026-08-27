@@ -6,6 +6,7 @@
 
 use crate::discover::SessionPaths;
 use crate::events;
+use crate::shell;
 use crate::transcript::{
     Block, Content, INJECTED_PREFIXES, Record, Subagent, Transcript, command_line,
 };
@@ -619,8 +620,25 @@ impl Summary {
 }
 
 /// Tools that routinely change files without exposing a diff kagviz can read.
+///
+/// Being one of these is necessary but no longer sufficient: since sprint 013
+/// the call's own command string is read too, and one that provably wrote
+/// nothing is not an unknown. See [`shell_wrote_nothing`].
 fn may_edit_opaquely(tool: &str) -> bool {
     matches!(tool, "Bash" | "PowerShell")
+}
+
+/// Whether a shell call's command string rules out a file change.
+///
+/// The input is unwrapped here rather than in [`shell`] so that a call with no
+/// readable `command` — an absent key, a non-string, a shape a future harness
+/// invents — falls to the opaque side along with everything else the
+/// classifier cannot read. There is no third answer.
+fn shell_wrote_nothing(input: Option<&Value>) -> bool {
+    input
+        .and_then(|i| i.get("command"))
+        .and_then(Value::as_str)
+        .is_some_and(shell::wrote_nothing)
 }
 
 /// Count a session.
@@ -1123,6 +1141,10 @@ struct Counter {
     events: Vec<events::Event>,
     /// tool_use id -> index into `events`, so a result joins its call.
     open: BTreeMap<String, usize>,
+    /// Shell tool -> how many of its calls were judged read-only, so
+    /// [`Counter::finish`] can charge `opaque_edits` for the rest while
+    /// `by_tool.<shell>.calls` stays the total.
+    shell_read_only: BTreeMap<String, u32>,
     /// `message.id` -> index of that message's `Turn` event.
     ///
     /// One API message is written as one record per content block — `thinking`,
@@ -1246,6 +1268,16 @@ impl Counter {
                     self.tool_names.insert(id.clone(), name.to_string());
                     self.open.insert(id.clone(), self.events.len());
                 }
+                // A shell call is opaque from the moment it is made — an
+                // interrupted one leaves no result and is still an edit kagviz
+                // cannot see — *unless* the command it was handed provably
+                // wrote nothing. Judged from the call for the same reason it
+                // is counted from the call.
+                let opaque = may_edit_opaquely(name);
+                let read_only = opaque && shell_wrote_nothing(block.input.as_ref());
+                if read_only {
+                    *self.shell_read_only.entry(name.to_string()).or_default() += 1;
+                }
                 self.events.push(events::Event::Tool {
                     at,
                     phase: None,
@@ -1259,11 +1291,10 @@ impl Counter {
                     files: Vec::new(),
                     lines_added: None,
                     lines_deleted: None,
-                    // A shell call is opaque from the moment it is made: an
-                    // interrupted one leaves no result and is still an edit
-                    // kagviz cannot see. The tally counts the same thing
-                    // from the call totals in `finish`.
-                    opaque: may_edit_opaquely(name),
+                    // The tally counts the same thing from the call totals
+                    // in `finish`, so a per-call sum of these is the facts'
+                    // `changes` exactly.
+                    opaque: opaque && !read_only,
                 });
             }
         }
@@ -1340,15 +1371,20 @@ impl Counter {
 
     /// Close the pass.
     ///
-    /// Shell tools that ran at all are counted as "could have changed files
-    /// unseen", never as changes. Every one of them is opaque by construction,
-    /// so they are added from the call tally rather than from results — an
-    /// interrupted `Bash` leaves no result and is still an edit kagviz cannot
-    /// see.
+    /// Shell tools that ran are counted as "could have changed files unseen",
+    /// never as changes, and are added from the call tally rather than from
+    /// results — an interrupted `Bash` leaves no result and is still an edit
+    /// kagviz cannot see.
+    ///
+    /// Since sprint 013 only the calls whose command string could not be ruled
+    /// out are charged. `calls` stays every call of the tool, so the read-only
+    /// share is visible as the difference rather than taken on faith.
     fn finish(mut self) -> Counts {
         for (name, n) in &self.tool_calls {
             if may_edit_opaquely(name) {
-                self.changes.opaque(name, *n as usize);
+                let read_only = self.shell_read_only.get(name).copied().unwrap_or(0);
+                self.changes
+                    .shell(name, *n as usize, n.saturating_sub(read_only) as usize);
             }
         }
         self.stamps.sort_unstable();
@@ -2007,6 +2043,21 @@ impl ChangeTally {
             }
             None => false,
         }
+    }
+
+    /// Record a shell tool's calls: `calls` were made and `opaque` of them
+    /// could have written something kagviz cannot see.
+    ///
+    /// The two are separate because `calls` must stay the **total**. It is the
+    /// audit surface for the allow-list in [`shell`] — the same argument
+    /// `by_tool` itself makes — and without it "N calls could have changed
+    /// files" would have to be taken on faith about how many were judged
+    /// harmless.
+    fn shell(&mut self, tool: &str, calls: usize, opaque: usize) {
+        let slot = self.changes.by_tool.entry(tool.to_string()).or_default();
+        slot.calls += calls;
+        slot.opaque += opaque;
+        self.changes.opaque_edits += opaque;
     }
 
     /// Record `n` calls of a tool that changes files with nothing to read.
@@ -2805,11 +2856,51 @@ mod tests {
 
     #[test]
     fn shell_calls_are_reported_as_opaque_rather_than_as_no_change() {
+        // No `input` at all: the classifier has no command to read, so the
+        // call keeps the answer it had before there was one — an unknown.
         let t = transcript(&[r#"{"type":"assistant","message":{"content":[
                 {"type":"tool_use","id":"t1","name":"Bash"}]}}"#]);
         let s = summarize(None, &t, &[]);
         assert_eq!(s.changes.files_touched, 0);
         assert_eq!(s.changes.opaque_edits, 1);
+    }
+
+    /// Narrowing `opaque_edits` to the shell calls that could have written.
+    /// The count that must not move is `by_tool.<shell>.calls`: it is the
+    /// total, and the read-only share is meant to be readable as the
+    /// difference rather than taken on faith.
+    #[test]
+    fn a_shell_call_that_provably_wrote_nothing_is_not_an_unknown() {
+        let t = transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "id":"m1","usage":{"output_tokens":10},"content":[
+                {"type":"tool_use","id":"t1","name":"Bash","input":{"command":"grep -rn TODO src/"}},
+                {"type":"tool_use","id":"t2","name":"Bash","input":{"command":"sed -i 's/a/b/' src/x.rs"}},
+                {"type":"tool_use","id":"t3","name":"Bash","input":{"command":"git status --short"}}]}}"#,
+        ]);
+        let (s, ev) = summarize_with_events(None, &t, &[]);
+        let bash = &s.changes.by_tool["Bash"];
+        assert_eq!(bash.calls, 3, "calls stays every call of the tool");
+        assert_eq!(bash.opaque, 1, "only the sed -i could have written");
+        assert_eq!(s.changes.opaque_edits, 1);
+        assert_eq!(s.changes.files_touched, 0, "a reader touches no files");
+
+        // And the events say the same thing, call by call — they are what the
+        // count is a count of.
+        let flags: Vec<bool> = ev
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                events::Event::Tool { opaque, .. } => Some(*opaque),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(flags, [false, true, false]);
+        assert_eq!(
+            flags.iter().filter(|o| **o).count(),
+            s.changes.opaque_edits,
+            "opaque events are exactly opaque_edits"
+        );
     }
 
     fn subagent(agent_id: &str, lines: &[&str]) -> Subagent {
@@ -3210,7 +3301,7 @@ mod tests {
                 r#"{"type":"assistant","timestamp":"2026-08-20T10:00:10.000Z","message":{
                     "model":"claude-opus-5","usage":{"output_tokens":40},
                     "content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/a.rs"}},
-                               {"type":"tool_use","id":"t2","name":"Bash","input":{"command":"ls"}}]}}"#,
+                               {"type":"tool_use","id":"t2","name":"Bash","input":{"command":"rm -rf out/"}}]}}"#,
                 r#"{"type":"user","timestamp":"2026-08-20T10:00:12.000Z","message":{"content":[
                     {"type":"tool_result","tool_use_id":"t1","content":"one\ntwo"}]}}"#,
                 r#"{"type":"user","timestamp":"2026-08-20T10:00:15.000Z","message":{"content":[

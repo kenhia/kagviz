@@ -151,6 +151,12 @@ pub const HARNESS_ORIGINS: &[&str] = &["task-notification"];
 
 #[derive(Debug, Deserialize)]
 pub struct Message {
+    /// The API message this record is one content block of. Several records
+    /// share it, all stamped with the same `usage`, which is why a turn is
+    /// counted per message and not per record — see trap 6 and
+    /// `summary::Counter`. Absent on a record the harness wrote without one,
+    /// and then the record counts on its own.
+    pub id: Option<String>,
     #[expect(dead_code)]
     pub role: Option<String>,
     pub model: Option<String>,

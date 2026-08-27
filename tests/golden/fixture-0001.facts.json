@@ -8,7 +8,7 @@
     "2.1.240"
   ],
   "models": {
-    "claude-opus-5": 16
+    "claude-opus-5": 15
   },
   "started": "2026-08-20T10:00:00Z",
   "ended": "2026-08-20T12:13:00Z",
@@ -17,7 +17,7 @@
   "idle_secs": 7470,
   "records": 40,
   "skipped_lines": 0,
-  "assistant_turns": 16,
+  "assistant_turns": 15,
   "user_prompts": 4,
   "pasted_attachments": 1,
   "ask_user_questions": 1,
@@ -46,10 +46,10 @@
     "Bash": 1
   },
   "tokens": {
-    "input": 47900,
-    "output": 2048,
+    "input": 43700,
+    "output": 2003,
     "thinking": 480,
-    "cache_read": 116400,
+    "cache_read": 106900,
     "cache_write": 11000
   },
   "changes": {
@@ -761,7 +761,7 @@
             "tool_calls": 1,
             "tool_failures": 0,
             "user_turns": 0,
-            "output_tokens": 45
+            "output_tokens": 0
           },
           {
             "records": 0,
@@ -930,7 +930,7 @@
       "records": 9,
       "tool_calls": 2,
       "tool_failures": 1,
-      "output_tokens": 158,
+      "output_tokens": 113,
       "mix": {
         "read": 1,
         "edit": 0,
@@ -995,7 +995,7 @@
         "started": "2026-08-20T12:10:05Z",
         "ended": "2026-08-20T12:10:20Z",
         "active_secs": 15,
-        "records": 5,
+        "records": 6,
         "skipped_lines": 0,
         "assistant_turns": 3,
         "tool_calls": {
@@ -1025,7 +1025,7 @@
     "unjoined_spawns": 1,
     "inline_records": 0,
     "totals": {
-      "records": 5,
+      "records": 6,
       "assistant_turns": 3,
       "tool_calls": {
         "Glob": 1,

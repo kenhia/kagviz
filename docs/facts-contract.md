@@ -40,6 +40,7 @@ whether it is affected without re-deriving anything.
 | 005 | `active_secs` is redefined as the sum of the span lengths — see below. | 560,283s → **558,730s**; 305 of 405 sessions corrected, every one downward, worst −198s. |
 | 009 | Optional fields are **absent** instead of `null` — every `Option` the document carries: `opened_by`, `chosen`, `header`, `at`, a spawn's `agent_id`/`subagent_type`/`description`/`model`/`started`/`ended`, the top-level `session_id`/`project`/`cwd`/`git_branch`/`started`/`ended`. The contract had promised this since it was written; the serializer only kept it for `labels`. | Bytes change on **397 of 405** sessions; **no value moves**. What had been `null`: `opened_by` 1,971 times (resumed phases), `chosen` 6, `subagent_type` and `description` 5 each (unjoined spawns), `cwd`/`git_branch`/`started`/`ended` once each (one session with no timestamped record). |
 | 009 | `subagents` is the sorted **set** of subagent types invoked, one entry each — as `skills` already was. How many times is `tool_calls` and `delegation`'s job. | 8 of 405 sessions: 21 entries → 9 (`Explore,Explore` → `Explore`). |
+| 013 | `assistant_turns`, `models`, every field of `tokens`, `phases[].output_tokens`, `activity…buckets[].output_tokens` and the delegated tier's equivalents count one **message** rather than one record. The harness writes one API message as one record per content block, all stamped with the same `usage`; see `transcript-format.md` trap 6. | `assistant_turns` 81,049 → **38,764** (+109.1% as counted), `tokens.output` 83,669,634 → **32,828,298** (+154.9%). Delegated: turns 1,720 → **603**, output 500,833 → **91,502**. **391 of 405** sessions. A message's tokens now land in the bucket and phase where it **opened**. |
 | 013 | `user_prompts`, `phases`, `user_involvement` and `activity…buckets[].user_turns` stop counting `<task-notification>` records — the harness reporting a finished background agent into the user channel, flagged by no `isMeta`. The discriminator is `origin.kind`; see `transcript-format.md` trap 7. | `user_prompts` 1,831 → **1,716** and `phases` 3,802 → **3,687**, both −115: every notification also cut a phase boundary. **49 of 405** sessions. `opened_by` moves on **0** of them — no session was opened by one, which is why the browse page never showed this. |
 
 Each row names what it did *not* touch as precisely as what it did. 005 left
@@ -72,7 +73,7 @@ Identity and environment:
 |---|---|
 | `session_id`, `project`, `cwd`, `git_branch` | As recorded on the transcript's records. |
 | `cli_versions` | Every CLI version that wrote into this file — a resumed session spans upgrades. |
-| `models` | model id → assistant turns on that model. |
+| `models` | model id → assistant turns on that model. Counts what `assistant_turns` counts, so the values sum to it — one **message** each, not one record. |
 
 Time — all three are reported because any one alone misleads:
 
@@ -89,7 +90,7 @@ Volume and outcome:
 |---|---|
 | `records` | Transcript lines parsed. |
 | `skipped_lines` | Lines that did **not** parse. Non-zero means every number here is partial, and the report says so on the page. |
-| `assistant_turns`, `user_prompts` | `user_prompts` counts real user turns only. Two traps, both in `transcript-format.md`: `promptId` rides on injected records too, and a record the harness wrote carries `isMeta` — including the instruction document a skill invocation hands the agent, which is *not* the user speaking. The `<command-*>` scaffold beside it **is**. |
+| `assistant_turns`, `user_prompts` | **A turn is a message, not a record**, on both sides, and neither is the same as `records`. Four traps, all in `transcript-format.md`: `promptId` rides on injected records too (1); a record the harness wrote carries `isMeta` — including the instruction document a skill hands the agent, though the `<command-*>` scaffold beside it **is** the user (5); one assistant message is written as several records sharing one `usage`, so `assistant_turns` counts distinct `message.id` (6, corrected in 013); and a `<task-notification>` is the harness reporting a finished background agent, flagged only by `origin.kind` (7, corrected in 013). |
 | `tool_calls`, `tool_failures` | tool name → count. Failures are joined to their call by `tool_use_id`; a failure whose call is not in the file is blamed on `<unknown>` rather than dropped. |
 | `tokens` | input / output / thinking / cache read / cache write. |
 | `changes` | `files_touched`, `lines_added`, `lines_deleted` recovered from a diff, plus `opaque_edits` and a per-tool `by_tool` breakdown. |

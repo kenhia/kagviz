@@ -276,6 +276,43 @@ against the transcript behind it — three rows saying `3,088 out` for one
 message — and not by any test, because **both** the facts and the events count
 it the same wrong way, so every cross-check between them agreed.
 
+**Fixed in 013**, and re-measured over the pinned 405-transcript corpus rather
+than the live mirror the discovery was made on:
+
+| | per record | per message | overcount |
+|---|---|---|---|
+| assistant records / messages | 81,049 | **38,764** | +109.1% |
+| `tokens.output` | 83,669,634 | **32,828,298** | +154.9% |
+| delegated `assistant_turns` | 1,720 | **603** | +185.2% |
+| delegated `tokens.output` | 500,833 | **91,502** | +447.3% |
+
+**391 of 405 sessions** move; the 7 with assistant records that do not are the
+ones whose every message is a single record.
+
+Three things checked before the correction was trusted, all over the pinned
+corpus:
+
+- **The usage block is byte-identical across every record of a message** — all
+  42,285 continuation records, zero differ. So "count it once" needs no choice
+  between first, last and max.
+- **A message's records are contiguous** — 0 non-contiguous ids. The
+  implementation still keys on `message.id` rather than on "same as the last
+  one", so an interleaving would dedup rather than double-count.
+- **Every assistant record carries `message.id`** — 0 without. The
+  count-on-its-own fallback for a record with none is therefore held by unit
+  tests, not by a measurement, on the same footing as `isSidechain`.
+
+The correction is in `summary::Counter`, which is the one place a per-record
+quantity is read, so the session, every spawn and the events document all take
+it together. Two consequences worth knowing:
+
+- A message's tokens land in the bucket and phase where the message
+  **opened**, not spread across the records it was written as.
+- The events document's promise that a `turn` is followed directly by its
+  `tool` events still holds when the calls arrive two records later: the
+  records between carry no events of their own. Checked over all 405 sessions
+  and every spawn — no turn's `tools` disagrees with the events that follow it.
+
 ### 7. A finished background agent writes into the user channel, and nothing flags it
 
 When a spawned agent finishes, the harness writes a `type: user` record whose

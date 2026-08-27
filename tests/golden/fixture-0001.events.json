@@ -354,20 +354,6 @@
         "cache_read": 8300,
         "cache_write": 1200
       },
-      "tools": 0
-    },
-    {
-      "kind": "turn",
-      "at": "2026-08-20T12:12:10Z",
-      "phase": 4,
-      "model": "claude-opus-5",
-      "tokens": {
-        "input": 4200,
-        "output": 45,
-        "thinking": 0,
-        "cache_read": 9500,
-        "cache_write": 0
-      },
       "tools": 1
     },
     {
@@ -462,7 +448,7 @@
         },
         {
           "kind": "turn",
-          "at": "2026-08-20T12:10:12Z",
+          "at": "2026-08-20T12:10:11Z",
           "model": "claude-sonnet-5",
           "tokens": {
             "input": 2600,

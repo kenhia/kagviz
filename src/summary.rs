@@ -720,7 +720,12 @@ pub fn summarize_with_events(
         if rec.kind == "assistant"
             && let Some(msg) = &rec.message
         {
-            if let Some(model) = &msg.model {
+            // Turns per model, so it counts what `assistant_turns` counts:
+            // the decision is the counter's, read back off `Counted` rather
+            // than made a second time here.
+            if let Some(model) = &msg.model
+                && counted.counted_turn
+            {
                 *s.models.entry(model.clone()).or_default() += 1;
             }
             for block in msg.content.blocks() {
@@ -1118,6 +1123,15 @@ struct Counter {
     events: Vec<events::Event>,
     /// tool_use id -> index into `events`, so a result joins its call.
     open: BTreeMap<String, usize>,
+    /// `message.id` -> index of that message's `Turn` event.
+    ///
+    /// One API message is written as one record per content block — `thinking`,
+    /// `text`, `tool_use` — and every one of them carries the same id and the
+    /// *same* `usage`. Counting per record read one message's tokens once per
+    /// block it was split into. This is what makes the message the turn: the
+    /// first record of it opens one, and the rest contribute only their tool
+    /// calls, to the turn already open. See `docs/transcript-format.md` trap 6.
+    messages: BTreeMap<String, usize>,
 }
 
 /// What one record contributed: the slice of the count a bucket or a phase
@@ -1125,6 +1139,12 @@ struct Counter {
 #[derive(Debug, Default, Clone)]
 struct Counted {
     at: Option<DateTime<Utc>>,
+    /// Whether this record *opened* an assistant turn, as opposed to being a
+    /// later block of one already counted. The only place the per-message
+    /// decision is made is [`Counter::count`]; anything outside the counter
+    /// that counts per turn — `models` — reads it from here rather than
+    /// deciding again.
+    counted_turn: bool,
     tool_calls: u32,
     tool_failures: u32,
     output_tokens: u64,
@@ -1164,37 +1184,60 @@ impl Counter {
         if rec.kind == "assistant"
             && let Some(msg) = &rec.message
         {
-            self.assistant_turns += 1;
-            let tokens = msg.usage.map(|u| TokenTotals {
-                input: u.input_tokens,
-                output: u.output_tokens,
-                thinking: u.output_tokens_details.thinking_tokens,
-                cache_read: u.cache_read_input_tokens,
-                cache_write: u.cache_creation_input_tokens,
-            });
-            if let Some(t) = &tokens {
-                self.tokens.input += t.input;
-                self.tokens.output += t.output;
-                self.tokens.thinking += t.thinking;
-                self.tokens.cache_read += t.cache_read;
-                self.tokens.cache_write += t.cache_write;
-                counted.output_tokens += t.output;
-            }
             let calls: Vec<&Block> = msg
                 .content
                 .blocks()
                 .iter()
                 .filter(|b| b.kind == "tool_use" && b.name.is_some())
                 .collect();
-            // The turn first, then its calls in the order the message made
-            // them — the adjacency a consumer groups on.
-            self.events.push(events::Event::Turn {
-                at,
-                phase: None,
-                model: msg.model.clone(),
-                tokens,
-                tools: calls.len() as u32,
-            });
+            // A message already opened by an earlier record of it. Its usage
+            // is that same block written down again and must not be added
+            // twice; its tool calls are real and are counted below, onto the
+            // turn that is already open. A record with no `message.id` has
+            // nothing to be a continuation *of*, and counts on its own.
+            let opened = msg
+                .id
+                .as_ref()
+                .and_then(|id| self.messages.get(id))
+                .copied();
+            if let Some(turn) = opened {
+                if let Some(events::Event::Turn { tools, .. }) = self.events.get_mut(turn) {
+                    *tools += calls.len() as u32;
+                }
+            } else {
+                self.assistant_turns += 1;
+                counted.counted_turn = true;
+                let tokens = msg.usage.map(|u| TokenTotals {
+                    input: u.input_tokens,
+                    output: u.output_tokens,
+                    thinking: u.output_tokens_details.thinking_tokens,
+                    cache_read: u.cache_read_input_tokens,
+                    cache_write: u.cache_creation_input_tokens,
+                });
+                if let Some(t) = &tokens {
+                    self.tokens.input += t.input;
+                    self.tokens.output += t.output;
+                    self.tokens.thinking += t.thinking;
+                    self.tokens.cache_read += t.cache_read;
+                    self.tokens.cache_write += t.cache_write;
+                    counted.output_tokens += t.output;
+                }
+                if let Some(id) = &msg.id {
+                    self.messages.insert(id.clone(), self.events.len());
+                }
+                // The turn first, then its calls in the order the message made
+                // them — the adjacency a consumer groups on. A message split
+                // across records keeps it: the records between carry no events
+                // of their own, so the calls still follow the turn they belong
+                // to, however many records later they were written.
+                self.events.push(events::Event::Turn {
+                    at,
+                    phase: None,
+                    model: msg.model.clone(),
+                    tokens,
+                    tools: calls.len() as u32,
+                });
+            }
             for block in calls {
                 let name = block.name.as_deref().unwrap_or_default();
                 *self.tool_calls.entry(name.to_string()).or_default() += 1;
@@ -2207,6 +2250,109 @@ mod tests {
             s.pasted_attachments, 1,
             "attachments are counted from the blocks, not from authorship"
         );
+    }
+
+    /// Trap 6. The harness writes one API message as one record per content
+    /// block — `thinking`, `text`, `tool_use` — and stamps every one of them
+    /// with the same `message.id` and the *same* `usage`. Counted per record,
+    /// one message's 3,088 output tokens read as 9,264.
+    #[test]
+    fn one_message_split_across_records_is_one_turn_counted_once() {
+        let usage = r#""usage":{"input_tokens":900,"output_tokens":3088,
+            "cache_read_input_tokens":40000,"cache_creation_input_tokens":12,
+            "output_tokens_details":{"thinking_tokens":2000}}"#;
+        let t = transcript(&[
+            &format!(
+                r#"{{"type":"assistant","timestamp":"2026-08-20T10:00:00.000Z","message":{{
+                   "id":"msg_013aTUq198","model":"claude-opus-5",{usage},
+                   "content":[{{"type":"thinking"}}]}}}}"#
+            ),
+            &format!(
+                r#"{{"type":"assistant","timestamp":"2026-08-20T10:00:02.000Z","message":{{
+                   "id":"msg_013aTUq198","model":"claude-opus-5",{usage},
+                   "content":[{{"type":"text","text":"here goes"}}]}}}}"#
+            ),
+            &format!(
+                r#"{{"type":"assistant","timestamp":"2026-08-20T10:00:03.000Z","message":{{
+                   "id":"msg_013aTUq198","model":"claude-opus-5",{usage},
+                   "content":[{{"type":"tool_use","id":"t1","name":"Read"}}]}}}}"#
+            ),
+        ]);
+        let s = summarize(None, &t, &[]);
+        assert_eq!(s.assistant_turns, 1, "one message is one turn");
+        assert_eq!(s.tokens.output, 3088, "the usage block is not three usages");
+        assert_eq!(s.tokens.input, 900, "and neither is any other field of it");
+        assert_eq!(s.tokens.thinking, 2000);
+        assert_eq!(s.tokens.cache_read, 40000);
+        assert_eq!(s.tokens.cache_write, 12);
+        assert_eq!(
+            s.models.get("claude-opus-5"),
+            Some(&1),
+            "turns per model counts what assistant_turns counts"
+        );
+        assert_eq!(s.tool_calls.get("Read"), Some(&1), "the call is still real");
+        assert_eq!(s.records, 3, "records still counts records");
+    }
+
+    /// A record with no `message.id` has nothing to be a continuation *of*.
+    /// Zero such assistant records exist in the pinned corpus, so this path is
+    /// held here rather than by a measurement — the same footing `isSidechain`
+    /// stands on.
+    #[test]
+    fn records_without_a_message_id_still_count_one_turn_each() {
+        let t = transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "model":"claude-opus-5","usage":{"output_tokens":10},"content":[{"type":"text"}]}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:01.000Z","message":{
+                "model":"claude-opus-5","usage":{"output_tokens":10},"content":[{"type":"text"}]}}"#,
+        ]);
+        let s = summarize(None, &t, &[]);
+        assert_eq!(s.assistant_turns, 2);
+        assert_eq!(s.tokens.output, 20);
+        assert_eq!(s.models.get("claude-opus-5"), Some(&2));
+    }
+
+    /// The events contract promises a `turn` is followed directly by its
+    /// `tool` events. A split message must keep that: the turn opens on the
+    /// first record, the calls arrive two records later, and the records
+    /// between carry no events of their own.
+    #[test]
+    fn a_split_messages_calls_still_follow_the_turn_that_made_them() {
+        let t = transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:00.000Z","message":{
+                "id":"m1","model":"claude-opus-5","usage":{"output_tokens":50},
+                "content":[{"type":"thinking"}]}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:01.000Z","message":{
+                "id":"m1","model":"claude-opus-5","usage":{"output_tokens":50},
+                "content":[{"type":"text","text":"ok"}]}}"#,
+            r#"{"type":"assistant","timestamp":"2026-08-20T10:00:02.000Z","message":{
+                "id":"m1","model":"claude-opus-5","usage":{"output_tokens":50},
+                "content":[{"type":"tool_use","id":"t1","name":"Read"},
+                           {"type":"tool_use","id":"t2","name":"Grep"}]}}"#,
+        ]);
+        let (s, ev) = summarize_with_events(None, &t, &[]);
+        assert_eq!(s.assistant_turns, 1);
+        let kinds: Vec<&str> = ev
+            .events
+            .iter()
+            .map(|e| match e {
+                events::Event::Turn { .. } => "turn",
+                events::Event::Tool { .. } => "tool",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            ["turn", "tool", "tool"],
+            "adjacency survives the split"
+        );
+        let events::Event::Turn { tools, tokens, .. } = &ev.events[0] else {
+            panic!("the first event is the turn");
+        };
+        assert_eq!(
+            *tools, 2,
+            "the turn claims both calls, however late they came"
+        );
+        assert_eq!(tokens.map(|t| t.output), Some(50));
     }
 
     /// Trap 7, and the reason `isMeta` alone was not enough: the harness

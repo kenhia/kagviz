@@ -12,6 +12,11 @@ the facts each produced at a known commit; see its `README.md`. Earlier
 revisions of this file cited 2.1.209 – 2.1.238, which was the range checked,
 not the range on disk._
 
+_Traps 6 and 7 were measured against that same pinned corpus on 2026-08-27
+(sprint 013), with the `origin.kind` distribution cross-checked against the
+413-session live mirror. No new CLI version: the mirror's newest sessions run
+2.1.233 – 2.1.240, inside the range above._
+
 ## Layout on disk
 
 ```

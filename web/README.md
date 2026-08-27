@@ -110,6 +110,13 @@ anything. Every document it reads is a file `kagviz derive` already wrote.
 The floor is _a_ static HTTP server, though — not `file://`. The shell boots
 through ES module `import()` and browsers refuse those on `file://`.
 
+Since sprint 014 that property has a standing exercise rather than a one-off
+verification. `just demo` deploys this bundle into a curated tree and serves it
+with `python3 -m http.server` on a LAN address, so a second server and a second
+origin get driven every time someone shows kagviz to anybody — including the
+`file://` floor, which is why the demo serves rather than opening the directory.
+See `docs/collection.md`.
+
 Moving hosts is therefore a copy and a URL, and that option is worth more than
 any single host is. Do not spend it.
 

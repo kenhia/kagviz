@@ -48,6 +48,13 @@ export interface SessionEntry {
 	facts: string;
 	report: string;
 	events: string;
+	/**
+	 * The calls document — the payload tier. **Absent when the tree carries
+	 * none**, which is the default state and the whole point: `derive` writes
+	 * call text only when asked, so this field being missing is the signal not
+	 * to offer to open one. Added in 015.
+	 */
+	calls?: string;
 	source_digest?: string;
 	kagviz?: string;
 }
@@ -95,6 +102,9 @@ export function decodeSessionEntry(raw: unknown, path: string): SessionEntry {
 		// Added in 009. A derived tree written before it has no `events`, and
 		// an empty string is what `#[serde(default)]` gives on the Rust side.
 		events: optStr(o, 'events', path) ?? '',
+		// Absent means the tree has no call text — never a reason to guess a
+		// path and fetch it. Left `undefined` rather than defaulted to ''.
+		calls: optStr(o, 'calls', path),
 		source_digest: optStr(o, 'source_digest', path),
 		kagviz: optStr(o, 'kagviz', path)
 	};

@@ -58,9 +58,9 @@
       "tool": "Bash",
       "class": "run",
       "id": "t3",
-      "input_bytes": 71,
+      "input_bytes": 83,
       "result_at": "2026-08-20T10:00:14Z",
-      "result_bytes": 21
+      "result_bytes": 42
     },
     {
       "kind": "turn",

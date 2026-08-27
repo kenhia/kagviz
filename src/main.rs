@@ -3,6 +3,7 @@
 //! Reads Claude Code session transcripts and reports what actually happened.
 //! Every number is derived from the transcript bytes, never inferred.
 
+mod calls;
 mod derive;
 mod discover;
 mod events;
@@ -53,6 +54,14 @@ enum Command {
         /// call, joined to its phase — the detail tier under the facts.
         #[arg(long, conflicts_with = "json")]
         events: bool,
+        /// Emit the calls document as JSON instead: what each tool call said
+        /// and what came back, joined to the events by `tool_use_id`.
+        ///
+        /// This is raw session content — command output, file contents,
+        /// pasted material, and potentially credentials. It is the one
+        /// document `derive` does not write by default.
+        #[arg(long, conflicts_with_all = ["json", "events"])]
+        calls: bool,
         #[command(flatten)]
         label: LabelOpts,
     },
@@ -84,6 +93,20 @@ enum Command {
         /// Re-derive every session, even ones whose bytes and kagviz are unchanged.
         #[arg(long)]
         force: bool,
+        /// Also write the calls document — what every tool call said and what
+        /// came back — to `<out>/calls/<host>/<id>.json`.
+        ///
+        /// **Off by default, and that is the disclosure boundary.** Everything
+        /// else kagviz derives is counted *from* the transcript; this is the
+        /// transcript's own payload text, and the mirrors it comes from are
+        /// not served. Passing this puts raw session content on the served
+        /// tree, so the flag *is* the decision. See sprint 015.
+        #[arg(long)]
+        calls: bool,
+        /// Remove any calls documents already in the derived tree, and write
+        /// none. The way back to the default state without deleting by hand.
+        #[arg(long, conflicts_with = "calls")]
+        drop_calls: bool,
         #[command(flatten)]
         label: LabelOpts,
     },
@@ -129,8 +152,9 @@ fn main() -> Result<()> {
             session_id,
             json,
             events,
+            calls,
             label,
-        } => show_session(&root, &session_id, json, events, &label),
+        } => show_session(&root, &session_id, json, events, calls, &label),
         Command::Render {
             session_id,
             from,
@@ -147,8 +171,19 @@ fn main() -> Result<()> {
             live,
             out,
             force,
+            calls,
+            drop_calls,
             label,
-        } => derive_sessions(live.as_deref(), out.as_deref(), force, &label),
+        } => derive_sessions(
+            live.as_deref(),
+            out.as_deref(),
+            &derive::Options {
+                force,
+                calls,
+                drop_calls,
+            },
+            &label,
+        ),
         Command::Index { derived } => index_sessions(derived.as_deref()),
     }
 }
@@ -164,7 +199,7 @@ fn live_root(flag: Option<&Path>) -> PathBuf {
 fn derive_sessions(
     live: Option<&Path>,
     out: Option<&Path>,
-    force: bool,
+    opts: &derive::Options,
     label: &LabelOpts,
 ) -> Result<()> {
     let live = live_root(live);
@@ -183,9 +218,7 @@ fn derive_sessions(
         ..label.clone()
     };
     let started = std::time::Instant::now();
-    let run = derive::derive(&live, &out, &derive::Options { force }, &mut |s| {
-        label_facts(s, &live, &label)
-    })?;
+    let run = derive::derive(&live, &out, opts, &mut |s| label_facts(s, &live, &label))?;
     for (host, r) in &run.hosts {
         println!(
             "{host:<8} {:>5} session(s)  {:>5} derived  {:>5} unchanged{}",
@@ -310,16 +343,28 @@ fn load_session(root: &Path, id: &str) -> Result<Summary> {
 
 /// The facts and the events document, from one pass over the transcript.
 fn load_session_with_events(root: &Path, id: &str) -> Result<(Summary, events::Events)> {
+    let (s, ev, _) = load_session_tiers(root, id, false)?;
+    Ok((s, ev))
+}
+
+/// Every tier from one pass. `want_calls` decides only whether the payload
+/// text is kept on the way past — it reaches nothing that produces a number.
+fn load_session_tiers(
+    root: &Path,
+    id: &str,
+    want_calls: bool,
+) -> Result<(Summary, events::Events, calls::Calls)> {
     let session = discover::sessions(root, None)?
         .into_iter()
         .find(|s| s.id == id)
         .with_context(|| format!("no session {id} under {}", root.display()))?;
     let (t, subagents) = transcript::read_session(&session)?;
-    Ok(summary::summarize_with_events(
-        Some(&session),
-        &t,
-        &subagents,
-    ))
+    Ok(if want_calls {
+        summary::summarize_with_calls(Some(&session), &t, &subagents)
+    } else {
+        let (s, ev) = summary::summarize_with_events(Some(&session), &t, &subagents);
+        (s, ev, calls::Calls::default())
+    })
 }
 
 /// Read a facts document written by `show --json` (`-` reads stdin).
@@ -369,7 +414,22 @@ fn render_report(
     Ok(())
 }
 
-fn show_session(root: &Path, id: &str, json: bool, events: bool, label: &LabelOpts) -> Result<()> {
+fn show_session(
+    root: &Path,
+    id: &str,
+    json: bool,
+    events: bool,
+    calls: bool,
+    label: &LabelOpts,
+) -> Result<()> {
+    if calls {
+        // The payload tier: the same bytes `derive --calls` writes. Printed
+        // on request only, here as there — this is the transcript's own text,
+        // not something counted from it.
+        let (_, _, ca) = load_session_tiers(root, id, true)?;
+        println!("{}", serde_json::to_string_pretty(&ca)?);
+        return Ok(());
+    }
     if events {
         // The detail tier: the same bytes `derive` writes beside the facts.
         // Labels are the facts' business and never ride here.

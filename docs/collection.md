@@ -21,6 +21,7 @@ snapshots with a date and a commit on them — and are untouched by any of this.
     derived/                 # everything computed from the mirrors
         facts/<host>/<session-id>.json     # `kagviz show --json`, byte for byte
         events/<host>/<session-id>.json    # `kagviz show --events` — the detail tier
+        calls/<host>/<session-id>.json     # `kagviz show --calls` — ONLY with --calls
         reports/<host>/<session-id>.html   # `kagviz render`
         sessions.json        # the cross-host index — a contract (facts-contract.md)
         index.html           # the page a person picks a session from
@@ -92,7 +93,7 @@ what a self-pruning source does.
 ## The derive — `kagviz derive`
 
 ```
-kagviz derive [--live DIR] [--out DIR] [--force] [--label …]
+kagviz derive [--live DIR] [--out DIR] [--force] [--calls|--drop-calls] [--label …]
 ```
 
 For every `<live>/<host>/projects/` (a host is any directory holding a
@@ -106,10 +107,39 @@ For every `<live>/<host>/projects/` (a host is any directory holding a
    version, and every output exists. Otherwise count it, write the facts (the
    same bytes `show --json` prints, trailing newline included, so a derived
    facts file diffs clean against a baseline), the events document (likewise,
-   against `show --events`) and the report, and record it.
+   against `show --events`) and the report, and record it. With `--calls`,
+   the calls document too — see below.
 3. Write `state.json` after each host, so a run that dies keeps what it did.
 
 Then regenerate `sessions.json` and `index.html`, and write `META.json`.
+
+### `--calls`, and why it is off
+
+`derive` writes `calls/` **only when asked**. Everything else under `derived/`
+is counted *from* the transcripts; the calls document is the transcripts' own
+payload text — command output, file contents, pasted material, and, on 59 of
+413 live sessions, something credential-shaped. The mirrors it comes from are
+not served at all, so this is the one thing in the tree whose presence is a
+decision rather than a consequence, and **the flag is that decision**.
+
+Three consequences worth knowing before you run it:
+
+- **The nightly timer never writes it.** `collect/kagviz-collect.service` runs
+  a plain `derive`, so the served tree stays in the default state unless
+  someone opts in by hand.
+- **Opting in re-derives.** `state.json` records the transcript bytes and the
+  kagviz version, neither of which changes when you add `--calls`, so the run
+  would otherwise report every session unchanged and write nothing. `derive`
+  checks that every output *it was asked for* is present, which is what makes
+  the first opt-in run actually do something.
+- **A later plain run leaves it alone**, because a run that was not asked
+  about call text does not get to decide about it. `--drop-calls` is the way
+  back to the default state; `index` reads the tree rather than the flag, so
+  `sessions.json` links `calls` exactly where a file exists.
+
+It costs about 114 MB over the 405-session corpus (median 204 KB a session,
+max 4.5 MB) on a volume already holding ~594 MB of mirrors. See
+`docs/facts-contract.md` and `sprints/015-the-leaf-opens.md`.
 
 **A kagviz upgrade regenerates all of `derived/`** without being asked: the
 version in `state.json` is `<crate version> (<commit>)`, stamped by `build.rs`
@@ -197,6 +227,7 @@ over Teams needs a second, temporary server.
 ```sh
 just demo                     # kagviz's own sessions, built and served
 just demo '*korg*' '*kmon*'   # quote the globs — your shell would eat them
+just demo --calls             # include the tool calls' own text (015)
 just demo --build-only        # build the tree, do not serve (pre-check)
 just demo --serve-only        # serve what is already built, no rebuild
 just demo --port 9000         # default 8028
@@ -231,13 +262,36 @@ Five things it does that the three obvious commands do not:
 - **Rebuilds the tree from scratch every time**, so last week's corpus cannot
   turn up on a projector.
 
-**It selects; it does not audit.** Ken's call at the start of 014: the person
+**It selects; it does not clear.** Ken's call at the start of 014: the person
 running the demo picks what to show and pre-checks it, so the recipe's job is
 the transport and the selection knob. It prints what is in the tree — the
 projects copied, the session count per host, the served size — and says in as
 many words that the prompt previews are the user's own words and nothing here
-checked them. There is no secret scan and nothing downstream should treat this
-as a safety gate.
+checked them. **Nothing downstream may treat this as a safety gate.**
+
+Sprint 015 added `--calls` and, with it, an **exposure floor** to the
+pre-check — a reporter, not a redactor, and the distinction is the design.
+It greps the *served* tree (`derived/`, the bytes the room can actually
+fetch, never the copied mirror beside it) for five known credential shapes
+and prints what it found. It scales with the choice that was made, which is
+the point of scanning what will be served rather than what was selected:
+
+```
+             default          --calls
+scanned      70 files         92 files
+matched      0 of 5 shapes    81:  private-key 5  sk-ant 15  KEY=value 58  dsn-password 3
+```
+
+That is one real project's 22 sessions, both ways — and it is the whole
+argument for `--calls` being off by default, in one screen, where the person
+about to share it is standing.
+
+What it can never say is "clean". It matches shapes someone thought of, so
+its zero is a fact about the scanner and not about the tree, and it prints
+that in as many words. **A redactor's clean pass is a claim about the text; a
+floor-reporter's zero is a claim about the scanner** — only the second can be
+true, which is why 015 built the second and rejected the first. Adding a
+pattern is welcome and changes none of that reading.
 
 **`sync-status.json` is deliberately not copied.** It reports the collector's
 last run over the whole fleet, which says nothing true about a hand-picked
@@ -248,9 +302,10 @@ app's `loadSyncStatus` catches the 404 into `undefined` and `SyncLine` says
 "no sync status". The one visible cost is a 404 for `sync-status.json` in the
 browser console, which is the designed-for path and not a defect.
 
-Nothing here changes the facts, the contract or the app. It is packaging, and
-it uses the property `web/README.md` records — the app works under any HTTP
-mount at any depth — without spending it.
+Nothing here changes the facts or the contract. It is packaging, and it uses
+the property `web/README.md` records — the app works under any HTTP mount at
+any depth — without spending it. `--calls` is the one thing it can put on the
+wire that a default `derive` would not, and it is off unless typed.
 
 ## Scheduling
 

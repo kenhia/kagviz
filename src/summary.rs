@@ -4,6 +4,7 @@
 //! transcript yields the same summary forever, which is the whole point — any
 //! model-written narrative sits *on top* of this, never inside it.
 
+use crate::calls;
 use crate::discover::SessionPaths;
 use crate::events;
 use crate::shell;
@@ -655,7 +656,7 @@ pub fn summarize(
     transcript: &Transcript,
     subagents: &[Subagent],
 ) -> Summary {
-    summarize_with_events(paths, transcript, subagents).0
+    count_session(paths, transcript, subagents, false).0
 }
 
 /// Count a session and keep the events tier: the facts, and the document of
@@ -668,6 +669,34 @@ pub fn summarize_with_events(
     transcript: &Transcript,
     subagents: &[Subagent],
 ) -> (Summary, events::Events) {
+    let (s, ev, _) = count_session(paths, transcript, subagents, false);
+    (s, ev)
+}
+
+/// The same pass, keeping the payload tier as well: the facts, the events,
+/// and what every one of those calls actually said.
+///
+/// Still one pass. The calls are built off the same blocks in the same
+/// iteration as the events, which is what makes `input`/`result` agree with
+/// `input_bytes`/`result_bytes` without anything having to check.
+///
+/// Opt-in, and that is the contract: `derive` writes the calls document only
+/// when asked, because it is the one document carrying raw session content
+/// rather than something counted from it. See `calls.rs` and sprint 015.
+pub fn summarize_with_calls(
+    paths: Option<&SessionPaths>,
+    transcript: &Transcript,
+    subagents: &[Subagent],
+) -> (Summary, events::Events, calls::Calls) {
+    count_session(paths, transcript, subagents, true)
+}
+
+fn count_session(
+    paths: Option<&SessionPaths>,
+    transcript: &Transcript,
+    subagents: &[Subagent],
+    want_calls: bool,
+) -> (Summary, events::Events, calls::Calls) {
     let records = &transcript.records;
     let mut s = Summary {
         skipped_lines: transcript.skipped,
@@ -680,7 +709,7 @@ pub fn summarize_with_events(
     // The counts both tiers share — turns, tokens, tool calls, failures, the
     // file-change tally, the events — through the one accumulator a spawn
     // counts with.
-    let mut counter = Counter::default();
+    let mut counter = Counter::new(want_calls);
     let mut ticks: Vec<Tick> = Vec::new();
     // Events from records with no timestamp. No bucket or phase can hold
     // them, so they go last and unplaced rather than nowhere.
@@ -870,8 +899,13 @@ pub fn summarize_with_events(
     s.subagents.sort();
     s.subagents.dedup();
 
-    let (delegation, spawn_events) =
-        build_delegation(subagents, &inline, &spawn_meta, agent_call_total);
+    let (delegation, spawn_events, spawn_calls) = build_delegation(
+        subagents,
+        &inline,
+        &spawn_meta,
+        agent_call_total,
+        want_calls,
+    );
     s.delegation = delegation;
 
     // Records are appended in order, but a transcript that merged two writers
@@ -901,13 +935,26 @@ pub fn summarize_with_events(
         .zip(&phase_of)
         .map(|(t, &p)| (t.events.clone(), Some(p)))
         .chain(unplaced.into_iter().map(|r| (r, None)));
+    // The session's own calls, then every spawn's, flattened: one list keyed
+    // by an id that is unique across the session. A consumer expanding a
+    // delegated agent's row joins exactly as it does for the parent's.
+    let calls = calls::Calls {
+        session_id: s.session_id.clone(),
+        calls: counts
+            .calls
+            .map(|mut c| {
+                c.extend(spawn_calls);
+                c
+            })
+            .unwrap_or_default(),
+    };
     let events = events::Events {
         session_id: s.session_id.clone(),
         events: place_events(counts.events, order),
         spawns: spawn_events,
     };
 
-    (s, events)
+    (s, events, calls)
 }
 
 /// Lay a pass's events out in `order`: ranges of the pass's list, each with
@@ -999,16 +1046,22 @@ fn build_delegation(
     inline: &BTreeMap<String, Vec<&Record>>,
     meta: &BTreeMap<String, SpawnMeta>,
     agent_call_total: usize,
-) -> (Delegation, Vec<events::SpawnEvents>) {
+    want_calls: bool,
+) -> (Delegation, Vec<events::SpawnEvents>, Vec<calls::Call>) {
     let mut d = Delegation::default();
 
     let mut tier = ChangeTally::default();
     // Each spawn beside its events, so the two stay in one order.
     let mut spawns: Vec<(Spawn, Vec<events::Event>)> = Vec::new();
+    // The spawns' payloads, in the order `d.spawns` ends up in, flattened by
+    // the caller onto the session's own.
+    let mut spawn_calls: Vec<calls::Call> = Vec::new();
 
     for sub in subagents {
         let records: Vec<&Record> = sub.transcript.records.iter().collect();
-        let (mut spawn, tally, ev) = summarize_spawn(&records, sub.transcript.skipped, true);
+        let (mut spawn, tally, ev, ca) =
+            summarize_spawn(&records, sub.transcript.skipped, true, want_calls);
+        spawn_calls.extend(ca);
         if spawn.agent_id.is_none() {
             spawn.agent_id.clone_from(&sub.agent_id);
         }
@@ -1017,7 +1070,8 @@ fn build_delegation(
     }
     for (agent_id, records) in inline {
         d.inline_records += records.len();
-        let (mut spawn, tally, ev) = summarize_spawn(records, 0, false);
+        let (mut spawn, tally, ev, ca) = summarize_spawn(records, 0, false, want_calls);
+        spawn_calls.extend(ca);
         if spawn.agent_id.is_none() && !agent_id.is_empty() {
             spawn.agent_id = Some(agent_id.clone());
         }
@@ -1065,7 +1119,7 @@ fn build_delegation(
         t.tokens.cache_write += spawn.tokens.cache_write;
     }
     t.changes = tier.finish();
-    (d, spawn_events)
+    (d, spawn_events, spawn_calls)
 }
 
 /// Count one delegated agent's records.
@@ -1078,14 +1132,15 @@ fn summarize_spawn(
     records: &[&Record],
     skipped: usize,
     sidecar: bool,
-) -> (Spawn, ChangeTally, Vec<events::Event>) {
+    want_calls: bool,
+) -> (Spawn, ChangeTally, Vec<events::Event>, Vec<calls::Call>) {
     let mut spawn = Spawn {
         sidecar,
         records: records.len(),
         skipped_lines: skipped,
         ..Spawn::default()
     };
-    let mut counter = Counter::default();
+    let mut counter = Counter::new(want_calls);
     let mut ticks: Vec<(Option<DateTime<Utc>>, Range<usize>)> = Vec::new();
     for rec in records {
         if spawn.agent_id.is_none() {
@@ -1112,7 +1167,12 @@ fn summarize_spawn(
     // parent's timeline.
     ticks.sort_by_key(|(at, _)| (at.is_none(), *at));
     let order = ticks.into_iter().map(|(_, r)| (r, None));
-    (spawn, counts.tally, place_events(counts.events, order))
+    (
+        spawn,
+        counts.tally,
+        place_events(counts.events, order),
+        counts.calls.unwrap_or_default(),
+    )
 }
 
 /// The per-record count both tiers are built from.
@@ -1141,6 +1201,15 @@ struct Counter {
     events: Vec<events::Event>,
     /// tool_use id -> index into `events`, so a result joins its call.
     open: BTreeMap<String, usize>,
+    /// The payload half of `events`, when the caller asked for it — `None`
+    /// when it did not, which is the common case: the calls document is the
+    /// one thing kagviz does not derive by default, and a run that will not
+    /// write it should not pay to build it. See `calls.rs`.
+    calls: Option<Vec<calls::Call>>,
+    /// tool_use id -> index into `calls`. A second map rather than a pair in
+    /// `open`, because `open` is keyed the same way and read by
+    /// [`result_index`], which then serves both.
+    open_calls: BTreeMap<String, usize>,
     /// Shell tool -> how many of its calls were judged read-only, so
     /// [`Counter::finish`] can charge `opaque_edits` for the rest while
     /// `by_tool.<shell>.calls` stays the total.
@@ -1188,9 +1257,24 @@ struct Counts {
     stamps: Vec<DateTime<Utc>>,
     /// In record order; the caller lays them out in cut order.
     events: Vec<events::Event>,
+    /// The payload half, in the order the calls were made, and **not**
+    /// re-laid-out: the calls document is joined by `tool_use_id`, never
+    /// read positionally, so record order is both deterministic and the most
+    /// useful thing to print. `None` when the pass was not asked for it.
+    calls: Option<Vec<calls::Call>>,
 }
 
 impl Counter {
+    /// A pass that will be asked for the calls document, or one that will
+    /// not. The flag reaches nothing that produces a number — it only decides
+    /// whether the payload text is kept on the way past.
+    fn new(want_calls: bool) -> Self {
+        Counter {
+            calls: want_calls.then(Vec::new),
+            ..Counter::default()
+        }
+    }
+
     /// Count one record.
     fn count(&mut self, rec: &Record) -> Counted {
         let at = rec.timestamp.as_deref().and_then(parse_stamp);
@@ -1267,6 +1351,20 @@ impl Counter {
                 if let Some(id) = &block.id {
                     self.tool_names.insert(id.clone(), name.to_string());
                     self.open.insert(id.clone(), self.events.len());
+                    if let Some(calls) = &self.calls {
+                        self.open_calls.insert(id.clone(), calls.len());
+                    }
+                }
+                // The payload beside the event, in the same iteration off the
+                // same block: that is what makes `input` and the event's
+                // `input_bytes` agree by construction rather than by test.
+                if let Some(calls) = &mut self.calls {
+                    calls.push(calls::Call {
+                        id: block.id.clone(),
+                        tool: name.to_string(),
+                        input: block.input.clone(),
+                        ..calls::Call::default()
+                    });
                 }
                 // A shell call is opaque from the moment it is made — an
                 // interrupted one leaves no result and is still an edit kagviz
@@ -1332,6 +1430,21 @@ impl Counter {
                     *was_failed = failed;
                     *result_bytes = Some(events::text_bytes(block.content.as_ref()));
                 }
+                // The same join, onto the same call's payload. `result` is
+                // set here and only here, so a call with no result keeps the
+                // `None` it was pushed with — an interrupted call and an
+                // empty result stay different readings.
+                if let Some(idx) = block
+                    .tool_use_id
+                    .as_ref()
+                    .and_then(|id| self.open_calls.get(id))
+                    .copied()
+                    && let Some(call) = self.calls.as_mut().and_then(|c| c.get_mut(idx))
+                {
+                    let (text, blocks) = calls::result_text(block.content.as_ref());
+                    call.result = Some(text);
+                    call.result_blocks = blocks;
+                }
             }
         }
 
@@ -1363,6 +1476,14 @@ impl Counter {
                     }
                 }
                 *opaque |= counted_opaque;
+            }
+            // What the model saw is a placeholder, and only the harness knows
+            // that. Read from `persistedOutputPath`, never from the shape of
+            // the text — see `calls::persisted`.
+            if let Some(idx) = result_index(rec, &self.open_calls)
+                && let Some(call) = self.calls.as_mut().and_then(|c| c.get_mut(idx))
+            {
+                (call.persisted, call.persisted_bytes) = calls::persisted(Some(result));
             }
         }
         counted.events = start..self.events.len();
@@ -1397,6 +1518,7 @@ impl Counter {
             tally: self.changes,
             stamps: self.stamps,
             events: self.events,
+            calls: self.calls,
         }
     }
 }

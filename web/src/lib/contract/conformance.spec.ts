@@ -2,7 +2,7 @@
  * The test that makes `contract/` a contract rather than a transcription.
  *
  * It reads the repo's own goldens — `tests/golden/fixture-0001.{facts,events,
- * sessions}.json`, the bytes the Rust binary actually emits, checked in and
+ * calls,sessions}.json`, the bytes the Rust binary actually emits, checked in and
  * regenerated with `KAGVIZ_UPDATE_GOLDEN=1` — puts them through the decoders,
  * and asserts the invariants `docs/facts-contract.md` states. It runs inside
  * `just check` and CI, so the app is the contract's **second consumer in the
@@ -18,9 +18,10 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import { ContractError, parse, sum } from './decode.js';
+import { ContractError, parse, sum, utf8Length } from './decode.js';
 import { decodeFacts, type Facts } from './facts.js';
 import { decodeEvents, isTool, isTurn, type ToolEvent } from './events.js';
+import { byId, decodeCalls } from './calls.js';
 import { decodeSessions, decodeSyncStatus } from './sessions.js';
 import * as derivedModule from './derived.js';
 import {
@@ -42,12 +43,14 @@ function golden(name: string): string {
 
 const factsText = golden('fixture-0001.facts.json');
 const eventsText = golden('fixture-0001.events.json');
+const callsText = golden('fixture-0001.calls.json');
 const sessionsText = golden('fixture-0001.sessions.json');
 const showText = golden('fixture-0001.show.txt');
 
 const facts = decodeFacts(parse(factsText, 'facts'));
 const events = decodeEvents(parse(eventsText, 'events'));
 const index = decodeSessions(parse(sessionsText, 'sessions.json'));
+const calls = decodeCalls(parse(callsText, 'calls'));
 
 const tools = events.events.filter(isTool);
 const turns = events.events.filter(isTurn);
@@ -264,6 +267,108 @@ describe('sessions.json', () => {
 		);
 		expect(status.hosts.cleo.status).toBe('unreachable');
 		expect(status.hosts.cleo.note).toBe('did not answer ssh');
+	});
+});
+
+describe('the calls document', () => {
+	it('decodes the golden', () => {
+		expect(calls.session_id).toBe(facts.session_id);
+		expect(calls.calls.length).toBeGreaterThan(0);
+	});
+
+	/**
+	 * The join, which is the whole contract of this document: one entry per
+	 * `tool` event across **both** tiers, looked up by `tool_use_id`.
+	 */
+	it('has one entry per tool event, spawns included', () => {
+		const spawned = events.spawns.flatMap((s) => s.events.filter(isTool));
+		expect(spawned.length).toBeGreaterThan(0); // else this proves only the parent
+		expect(calls.calls).toHaveLength(tools.length + spawned.length);
+
+		const m = byId(calls);
+		for (const t of [...tools, ...spawned]) {
+			expect(t.id).toBeDefined();
+			const c = m.get(t.id!);
+			expect(c, `no calls entry for ${t.id}`).toBeDefined();
+			expect(c!.tool).toBe(t.tool);
+		}
+	});
+
+	/**
+	 * The two sizes the events carry are the lengths of the two things the
+	 * calls carry. Both documents are filled from the same block in the same
+	 * pass, so this holds by construction — and the app leans on it to show a
+	 * byte count beside text it did not measure itself.
+	 */
+	it('carries text whose UTF-8 length is the size the events reported', () => {
+		const m = byId(calls);
+		for (const t of tools) {
+			const c = m.get(t.id!)!;
+			expect(c.input === undefined).toBe(t.input_bytes === undefined);
+			if (c.input !== undefined) {
+				expect(utf8Length(JSON.stringify(c.input))).toBe(t.input_bytes);
+			}
+			expect(c.result === undefined).toBe(t.result_bytes === undefined);
+			if (c.result !== undefined) {
+				expect(utf8Length(c.result)).toBe(t.result_bytes);
+			}
+		}
+	});
+
+	/**
+	 * The guard on the test above, and the reason the fixture carries an
+	 * em-dash and a µ at all.
+	 *
+	 * Every size kagviz reports is UTF-8 bytes; `String.length` is UTF-16 code
+	 * units. On pure ASCII they agree, so a fixture without a single non-ASCII
+	 * byte lets a consumer write `.length`, watch it pass, and be wrong on
+	 * 6,093 of the corpus's 11,819 tool results. This asserts the fixture can
+	 * still tell the two apart — if it ever stops being able to, the test
+	 * above has quietly become unfalsifiable.
+	 */
+	it('has a payload where UTF-8 bytes and UTF-16 units disagree', () => {
+		const differing = calls.calls.filter(
+			(c) => c.result !== undefined && utf8Length(c.result) !== c.result.length
+		);
+		expect(differing.length).toBeGreaterThan(0);
+	});
+
+	/**
+	 * The reading this document exists to protect. A consumer that draws
+	 * `undefined` and `''` the same way has turned an unknown into a zero —
+	 * the defect `opaque_edits` exists to prevent, one document further down.
+	 */
+	it('keeps an absent result and an empty one apart', () => {
+		const raw = parse(callsText, 'calls') as { calls: Record<string, unknown>[] };
+		for (const c of raw.calls) {
+			expect(c, 'an optional field is absent, never null').not.toHaveProperty('result', null);
+			expect(c).not.toHaveProperty('input', null);
+		}
+		// And the decoder must not invent one either.
+		const decoded = decodeCalls({ calls: [{ tool: 'Bash', id: 'x' }] });
+		expect(decoded.calls[0].result).toBeUndefined();
+		expect(decodeCalls({ calls: [{ tool: 'Bash', id: 'x', result: '' }] }).calls[0].result).toBe(
+			''
+		);
+	});
+
+	it('reads flags-when-true as false when they are absent', () => {
+		const c = decodeCalls({ calls: [{ tool: 'Bash' }] }).calls[0];
+		expect(c.persisted).toBe(false);
+		expect(c.result_blocks).toEqual([]);
+		expect(c.persisted_bytes).toBeUndefined();
+		expect(c.id).toBeUndefined();
+	});
+
+	/**
+	 * `sessions.json` links the payload tier only where the tree has one, and
+	 * the fixture's derived tree is the default state — no call text. That
+	 * absence is what the app reads to say "this tree carries none" rather
+	 * than guessing a path and calling a 404 an answer.
+	 */
+	it('is not linked from an index whose tree carries no call text', () => {
+		expect(index.sessions[0].calls).toBeUndefined();
+		expect(index.sessions[0].events).toBe(`events/kai/${facts.session_id}.json`);
 	});
 });
 

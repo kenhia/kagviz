@@ -85,9 +85,18 @@ impl Run {
     }
 }
 
+#[derive(Debug, Default)]
 pub struct Options {
     /// Re-derive every session, even ones whose bytes and kagviz are unchanged.
     pub force: bool,
+    /// Also write the calls document for every session — the payload tier.
+    ///
+    /// **Off by default, and that is the disclosure boundary.** See
+    /// [`calls_path`] and `calls.rs`.
+    pub calls: bool,
+    /// Remove any calls document already in the tree, and write none. The way
+    /// back to the default state without deleting by hand.
+    pub drop_calls: bool,
 }
 
 /// The hosts under a live root: every directory holding a `projects/`
@@ -148,6 +157,18 @@ pub fn events_path(out: &Path, host: &str, id: &str) -> PathBuf {
     out.join("events").join(host).join(format!("{id}.json"))
 }
 
+/// The calls document — the payload tier under the events, the same bytes
+/// `kagviz show --calls` prints.
+///
+/// **Written only when `derive` is asked for it**, which is the one place
+/// this tree's contents are a decision rather than a consequence: everything
+/// else under `derived/` is counted *from* the transcript, and this is the
+/// transcript's own text. A tree with no `calls/` is the default state, and
+/// `--drop-calls` puts a tree back into it. See sprint 015.
+pub fn calls_path(out: &Path, host: &str, id: &str) -> PathBuf {
+    out.join("calls").join(host).join(format!("{id}.json"))
+}
+
 /// Derive facts and a report for every new or changed session under `live`,
 /// then regenerate the index and `META.json`.
 ///
@@ -179,8 +200,9 @@ pub fn derive(
                 facts: facts_path(out, &host, &session.id),
                 events: events_path(out, &host, &session.id),
                 report: report_path(out, &host, &session.id),
+                calls: calls_path(out, &host, &session.id),
             };
-            match derive_one(session, &paths, &key, &mut state, opts.force, label) {
+            match derive_one(session, &paths, &key, &mut state, opts, label) {
                 Ok(true) => hr.derived += 1,
                 Ok(false) => hr.unchanged += 1,
                 Err(e) => {
@@ -219,11 +241,22 @@ struct Outputs {
     facts: PathBuf,
     events: PathBuf,
     report: PathBuf,
+    calls: PathBuf,
 }
 
 impl Outputs {
-    fn all_present(&self) -> bool {
-        self.facts.is_file() && self.events.is_file() && self.report.is_file()
+    /// Whether every output this run is meant to produce is already on disk.
+    ///
+    /// `opts` is read here and not only at the write, and that is the trap
+    /// this closes: `state.json` records the transcript bytes and the kagviz
+    /// version, neither of which changes when someone adds `--calls` to a
+    /// tree already derived without it. Without this the first opt-in run
+    /// would report every session unchanged and write nothing at all.
+    fn all_present(&self, opts: &Options) -> bool {
+        self.facts.is_file()
+            && self.events.is_file()
+            && self.report.is_file()
+            && (!opts.calls || self.calls.is_file())
     }
 }
 
@@ -234,18 +267,30 @@ fn derive_one(
     out: &Outputs,
     key: &str,
     state: &mut State,
-    force: bool,
+    opts: &Options,
     label: &mut dyn FnMut(&mut Summary),
 ) -> Result<bool> {
+    // Dropping is not deriving: it takes the payload tier off a tree that was
+    // opted in, whether or not that session is otherwise up to date. Done
+    // before the unchanged check for exactly that reason.
+    if opts.drop_calls && out.calls.is_file() {
+        std::fs::remove_file(&out.calls)
+            .with_context(|| format!("removing {}", out.calls.display()))?;
+    }
     let current = Derived {
         source_digest: source_digest(session)?,
         kagviz: VERSION.to_string(),
     };
-    if !force && state.get(key) == Some(&current) && out.all_present() {
+    if !opts.force && state.get(key) == Some(&current) && out.all_present(opts) {
         return Ok(false);
     }
     let (t, subagents) = transcript::read_session(session)?;
-    let (mut s, events) = summary::summarize_with_events(Some(session), &t, &subagents);
+    let (mut s, events, calls) = if opts.calls {
+        summary::summarize_with_calls(Some(session), &t, &subagents)
+    } else {
+        let (s, ev) = summary::summarize_with_events(Some(session), &t, &subagents);
+        (s, ev, crate::calls::Calls::default())
+    };
     label(&mut s);
     // The same bytes `kagviz show --json > file` writes, trailing newline
     // included, so a derived facts file diffs clean against a baseline. The
@@ -257,6 +302,13 @@ fn derive_one(
     json.push('\n');
     write_atomic(&out.events, json.as_bytes())?;
     write_atomic(&out.report, render::report(&s).as_bytes())?;
+    if opts.calls {
+        // The same bytes `kagviz show --calls` prints, trailing newline
+        // included, so a derived file diffs clean against one taken by hand.
+        let mut json = serde_json::to_string_pretty(&calls)?;
+        json.push('\n');
+        write_atomic(&out.calls, json.as_bytes())?;
+    }
     state.insert(key.to_string(), current);
     Ok(true)
 }
@@ -343,6 +395,14 @@ pub struct SessionEntry {
     /// The events document — the detail tier under `facts`. Added in 009.
     #[serde(default)]
     pub events: String,
+    /// The calls document — the payload tier under `events`. Added in 015.
+    ///
+    /// **Absent when the tree carries none**, which is the default state, and
+    /// that absence is the signal: a consumer offers to open a call's text
+    /// only where there is text to open. Never `null`, like every other
+    /// optional field here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calls: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_digest: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -409,7 +469,18 @@ pub fn index(out: &Path) -> Result<usize> {
                         file.display()
                     )
                 })?;
-                entries.push(entry(host, id, &s, state.get(&format!("{host}/{id}"))));
+                // Whether the payload tier is on the tree is read from the
+                // tree, not from an option: `index` is a pure function of
+                // what is on disk, and a run of `derive` that wrote no calls
+                // must not un-link ones an earlier opted-in run did write.
+                let has_calls = calls_path(out, host, id).is_file();
+                entries.push(entry(
+                    host,
+                    id,
+                    &s,
+                    state.get(&format!("{host}/{id}")),
+                    has_calls,
+                ));
             }
         }
     }
@@ -466,7 +537,13 @@ fn read_sync(path: &Path) -> Option<SyncStatus> {
 
 /// One index row from one facts document. Copies and sums; computes nothing
 /// that is not already on the page of that session's report.
-pub fn entry(host: &str, id: &str, s: &Summary, d: Option<&Derived>) -> SessionEntry {
+pub fn entry(
+    host: &str,
+    id: &str,
+    s: &Summary,
+    d: Option<&Derived>,
+    has_calls: bool,
+) -> SessionEntry {
     SessionEntry {
         host: host.to_string(),
         session_id: id.to_string(),
@@ -499,6 +576,7 @@ pub fn entry(host: &str, id: &str, s: &Summary, d: Option<&Derived>) -> SessionE
         facts: format!("facts/{host}/{id}.json"),
         report: format!("reports/{host}/{id}.html"),
         events: format!("events/{host}/{id}.json"),
+        calls: has_calls.then(|| format!("calls/{host}/{id}.json")),
         source_digest: d.map(|d| d.source_digest.clone()),
         kagviz: d.map(|d| d.kagviz.clone()),
     }
@@ -831,7 +909,7 @@ mod tests {
         let path = mirror(&live, "kai", "a", &[PROMPT, TOOL]);
         mirror(&live, "kubs0", "b", &[PROMPT]);
         let out = live.join("derived");
-        let opts = Options { force: false };
+        let opts = Options::default();
 
         let run = derive(&live, &out, &opts, &mut no_labels).unwrap();
         assert_eq!(run.hosts["kai"].derived, 1);
@@ -870,7 +948,16 @@ mod tests {
         assert_eq!(run.hosts["kubs0"].derived, 1);
 
         // --force re-derives everything.
-        let run = derive(&live, &out, &Options { force: true }, &mut no_labels).unwrap();
+        let run = derive(
+            &live,
+            &out,
+            &Options {
+                force: true,
+                ..Options::default()
+            },
+            &mut no_labels,
+        )
+        .unwrap();
         assert_eq!(run.hosts["kai"].derived + run.hosts["kubs0"].derived, 2);
     }
 
@@ -882,7 +969,7 @@ mod tests {
         mirror(&live, "kai", "a", &[PROMPT, TOOL]);
         let out = live.join("derived");
         let mut seen = 0;
-        derive(&live, &out, &Options { force: false }, &mut |s| {
+        derive(&live, &out, &Options::default(), &mut |s| {
             seen += 1;
             assert_eq!(s.session_id.as_deref(), Some("s1"));
         })
@@ -906,7 +993,7 @@ mod tests {
         )
         .unwrap();
         let out = live.join("derived");
-        derive(&live, &out, &Options { force: false }, &mut no_labels).unwrap();
+        derive(&live, &out, &Options::default(), &mut no_labels).unwrap();
 
         let doc: Sessions =
             serde_json::from_str(&fs::read_to_string(out.join("sessions.json")).unwrap()).unwrap();
@@ -954,7 +1041,7 @@ mod tests {
         let live = scratch("headline");
         mirror(&live, "kai", "a", &[PROMPT, TOOL]);
         let out = live.join("derived");
-        derive(&live, &out, &Options { force: false }, &mut |s| {
+        derive(&live, &out, &Options::default(), &mut |s| {
             s.labels = Some(crate::label::Labels {
                 headline: "Read one file and stopped.".to_string(),
                 phases: vec![],
@@ -986,7 +1073,7 @@ mod tests {
         mirror(&live, "kai", "a", &[PROMPT, TOOL]);
         let out = live.join("derived");
 
-        derive(&live, &out, &Options { force: false }, &mut no_labels).unwrap();
+        derive(&live, &out, &Options::default(), &mut no_labels).unwrap();
         let before = fs::read_to_string(out.join("index.html")).unwrap();
         assert!(
             !before.contains(APP_ENTRY),
@@ -1012,7 +1099,7 @@ mod tests {
             &[&PROMPT.replace("make it go", "see https://example.invalid/spec")],
         );
         let out = live.join("derived");
-        derive(&live, &out, &Options { force: false }, &mut no_labels).unwrap();
+        derive(&live, &out, &Options::default(), &mut no_labels).unwrap();
         let html = fs::read_to_string(out.join("index.html")).unwrap();
         assert!(html.starts_with("<!doctype html>"));
         for probe in [

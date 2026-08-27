@@ -159,3 +159,18 @@ export function parse(text: string, what: string): unknown {
 		throw new ContractError(what, `not JSON: ${e instanceof Error ? e.message : String(e)}`);
 	}
 }
+
+/**
+ * UTF-8 bytes of a string — **not** `String.length`, which counts UTF-16 code
+ * units.
+ *
+ * Every size kagviz reports is UTF-8 bytes, because Rust's `str::len()` is.
+ * The two agree only on pure ASCII, and a JS consumer that reaches for
+ * `.length` gets a number that is right on the fixture and wrong in the wild:
+ * measured over the pinned corpus, **6,093 of 11,819 tool results** disagree.
+ * That is not an edge case, and it is why this is a shared helper rather than
+ * a note.
+ */
+export function utf8Length(s: string): number {
+	return new TextEncoder().encode(s).length;
+}

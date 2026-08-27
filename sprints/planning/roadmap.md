@@ -207,47 +207,40 @@ substitute for reading one against the source.
 
 ## Next
 
-- **Sprint 015 — the leaf opens: read what the call actually said**
-  (korg:1659; #1656, #1657, #1658). Sprint 012's leaf tells you a `Bash` call
-  ran, took 4s, sent 90 bytes, got 4,400 back and failed. It cannot tell you
-  what the command *was* — the events document carries no payload text on
-  purpose, because "this document would be the transcript again". A fourth
-  served document (`calls/<host>/<id>.json`) carries each call's input and
-  result, and the segment panel expands a row into it.
+- **Sprint 015 — the leaf opens: read what the call actually said** — SHIPPED
+  (korg:1659; #1656, #1657, #1658). The fourth document, `calls/<host>/<id>.json`,
+  and a tool row that opens into what the call said.
 
-  **Measured before proposing, and it inverted the premise.** This was expected
-  to need a server on the host for the data volume. It does not: the harness
-  already bounds payloads by offloading large results to `tool-results/*.txt`
-  and leaving a `<persisted-output>` placeholder, so across 413 sessions the
-  90,182 payloads total **103 MB** — median 308 B, p99 11.8 KB, **max 85 KB**,
-  and *nothing* over 100 KB. Per session that is a 190 KB file at the median
-  against an events document the app already fetches at 42 KB. Same class of
-  artefact, not a new one.
+  **The disclosure decision was taken first, and it split into two knobs that
+  had been conflated.** "Off by default" turned out not to be about removing
+  sensitive bits at all: it is whether the document is *written*, and the
+  reason is blast radius — `collect/demo.sh` runs a bare `derive`, so a
+  default-on `calls/` would put raw session content in every demo without
+  anyone deciding to. Redaction is the separate question, and it was rejected:
+  a scanner that catches 51 shapes and misses the 52nd manufactures false
+  confidence. `just demo --calls` passes the flag through, because Ken wants
+  full fidelity in a demo and there was no reason he could not have it.
 
-  What *would* justify an engine is the cross-session work under Later/Ideas —
-  trends across a project, comparing two sessions, search — where a query
-  ranges over all 413 and cannot be answered by fetching one file. Building a
-  service for the leaf would cost the property that makes this cheap:
-  `derived/` is disposable and the deploy artifact is one binary a timer runs.
+  What went in instead of a redactor is a **floor-reporter** in the demo
+  pre-check. One real project, both ways: 0 matches by default, **81 with
+  `--calls`** (5 private keys, 15 `sk-ant`, 58 `KEY=value`, 3 DSN passwords).
+  Off-by-default justified in one screen, where the presenter is standing.
+  **A redactor's clean pass is a claim about the text; a floor-reporter's zero
+  is a claim about the scanner** — only the second can be true.
 
-  **The gate is disclosure, not storage.** Everything served today is derived,
-  and the raw mirrors are unreachable. Call text would be the first raw session
-  content on a served surface — and 59 of 413 sessions carry a
-  credential-shaped payload (~51 plausibly live, plus 172 placeholder DSNs).
-  A redactor is the obvious move and the trap: one that catches 51 and misses
-  the 52nd manufactures false confidence, which is the unknown-rendered-as-a-
-  zero this project refuses everywhere else. So #1657 is a decision, taken
-  first, on the record.
+  Measured: additive, with facts and events **byte-identical to the 013
+  baseline across all 405 transcripts**; 45,394 calls with zero invariant
+  violations; 114 MB, against the 103 MB the proposal projected.
 
-  **That flip condition fired.** 015 was ranked behind 014 on the assumption
-  that `just demo` would build curation this could reuse. It did not: 014
-  ships transport and a selection knob, and its curation is a human pre-check
-  (korg:1649, and `sprints/014-just-demo-off-tailnet.md`). So there is no
-  mechanism to inherit and nothing to treat as a gate — 015 should ship
-  `calls/` **off by default** (`derive` writes it only when asked; the demo
-  tree never contains it), which keeps 014's exposure surface provably
-  unchanged and leaves #1657's decision the only thing standing between the
-  call text and a served surface.
+  **And the sprint found a defect in its own contract.** `String.length` is
+  UTF-16 code units where every size kagviz emits is UTF-8 bytes — they part
+  company on **6,093 of 11,819** corpus tool results. The conformance test had
+  passed because `tests/fixtures/` held not one non-ASCII byte, so it *could
+  not* have failed. The second time this project has paid for that shape: 012's
+  phase-failure claim held in three places "only because the fixture has no
+  straddling call". The question worth asking of any new invariant is what the
+  fixture would have to contain for its test to be able to fail. See
+  `sprints/015-the-leaf-opens.md`.
 
 ## Later / Ideas
 

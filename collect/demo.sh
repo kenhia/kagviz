@@ -9,18 +9,30 @@
 # reaches the LAN, so showing kagviz over Teams needs a second, temporary
 # server on kai's LAN address. That is the whole job.
 #
-# What it does NOT do: check what it is about to serve. The corpus is chosen
+# What it does NOT do: clear what it is about to serve. The corpus is chosen
 # by the person running the demo and pre-checked by them (Ken's call, sprint
-# 014) — this script selects and serves, it does not audit. It prints what is
-# in the tree so the presenter can see what the room will see, and stops
-# there.
+# 014) — this script selects and serves, it does not audit.
+#
+# Since sprint 015 it does *report* a floor: it greps the served tree for
+# known credential shapes and prints what it found. That is not the same as
+# auditing, and the difference is the point. A redactor's clean pass is a
+# claim about the text; this is a claim about the scanner. It finds only
+# shapes someone thought of, so a zero here means "none of the shapes this
+# knows about", never "clean" — read the tree yourself either way.
 #
 #   just demo                     # kagviz's own sessions, built and served
 #   just demo '*korg*' '*kmon*'   # quote the globs — your shell would eat them
+#   just demo --calls             # include the call text (see below)
 #   just demo --build-only        # build the tree, do not serve (pre-check)
 #   just demo --serve-only        # serve the tree already built, no rebuild
 #   just demo --port 9000
 #   just demo-clean               # remove the tree
+#
+# --calls puts the tool calls' own input and result text on the demo tree, so
+# the app's segment panel can open a row and show what the command was. It is
+# off by default in *both* trees for the same reason: everything else kagviz
+# serves is counted from the transcript, and this is the transcript. Passing
+# it is the decision. See sprint 015 and docs/facts-contract.md.
 #
 # Env: KAGVIZ_LIVE (mirror root), KAGVIZ_BIN (default: this repo's release
 # build), KAGVIZ_DEMO_TREE (where the curated tree goes),
@@ -35,6 +47,7 @@ TREE="${KAGVIZ_DEMO_TREE:-$HOME/.cache/kagviz-demo}"
 PORT=8028
 BUILD=1
 SERVE=1
+CALLS=0
 PATTERNS=()
 
 die() {
@@ -51,6 +64,7 @@ LAN address, where a machine that is not on the tailnet can reach it.
 
   just demo                     kagviz's own sessions, built and served
   just demo '*korg*' '*kmon*'   quote the globs — your shell would eat them
+  just demo --calls             include each tool call's input and result text
   just demo --build-only        build the tree, do not serve (pre-check)
   just demo --serve-only        serve the tree already built, no rebuild
   just demo --port 9000         default is 8028
@@ -64,6 +78,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --build-only) SERVE=0 ;;
     --serve-only) BUILD=0 ;;
+    --calls) CALLS=1 ;;
     --port)
       [[ $# -ge 2 ]] || die "--port needs a number"
       PORT="$2"
@@ -137,7 +152,11 @@ if [[ $BUILD -eq 1 ]]; then
   # last run over the whole fleet, which says nothing true about a hand-picked
   # tree — and the line the index prints without it ("the collector has not
   # run, or these mirrors were not written by it") is exactly right here.
-  "$KAGVIZ" derive --live "$TREE" || die "derive failed"
+  # --calls is passed straight through: off by default here exactly as it is
+  # on the tailnet tree, and one flag away in both.
+  derive_args=(derive --live "$TREE")
+  [[ $CALLS -eq 1 ]] && derive_args+=(--calls)
+  "$KAGVIZ" "${derive_args[@]}" || die "derive failed"
 
   # Quiet unless it breaks: the npm build's output is a screenful, and the one
   # line web-deploy prints names copyparty's mount rather than this one.
@@ -178,6 +197,56 @@ if [[ $BUILD -eq 1 ]]; then
 fi
 echo "  sessions $total  ($per_host)"
 echo "  size     $served served  ($size on disk, with the copied mirror)"
+# --- the exposure floor ----------------------------------------------------
+#
+# A reporter, not a redactor, and the distinction is the whole design. It
+# greps the *served* tree — the bytes the room can actually fetch — so its
+# answer scales with the choice that was made: without --calls it sees the
+# derived documents and their capped previews, with --calls it sees the call
+# text too. What it can never say is "clean". It matches shapes someone
+# thought of in an afternoon, so its zero is a fact about this scanner and
+# not about the tree, and it says so in as many words.
+#
+# Adding a pattern here is welcome and changes nothing about that reading.
+
+scan_label=(private-key sk-ant bearer-header KEY=value dsn-password)
+scan_pattern=(
+  '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+  'sk-ant-[A-Za-z0-9_-]{16,}'
+  '[Aa]uthorization[^A-Za-z0-9]{1,4}[Bb]earer [A-Za-z0-9._~+/-]{16,}'
+  '[A-Z0-9_]*(TOKEN|SECRET|PASSWORD|API_KEY)[A-Z0-9_]*[^A-Za-z0-9]{1,4}[A-Za-z0-9._~+/-]{12,}'
+  '[a-z][a-z0-9+.-]*://[^:/@[:space:]"]+:[^@/[:space:]"]+@'
+)
+
+files=$(find "$TREE/derived" -type f \( -name '*.json' -o -name '*.html' \) \
+  -not -path '*/app/*' | wc -l)
+hits=()
+total=0
+for i in "${!scan_pattern[@]}"; do
+  n=$(find "$TREE/derived" -type f \( -name '*.json' -o -name '*.html' \) \
+    -not -path '*/app/*' -print0 |
+    xargs -0 grep -EoIh -- "${scan_pattern[$i]}" 2>/dev/null | wc -l)
+  total=$((total + n))
+  [[ $n -gt 0 ]] && hits+=("${scan_label[$i]} $n")
+done
+
+echo "exposure floor"
+if [[ $CALLS -eq 1 ]]; then
+  echo "  CALL TEXT IS IN THIS TREE (--calls). Every tool call's input and result"
+  echo "  is servable — command output, file contents, whatever was pasted in."
+else
+  echo "  no call text (default). The served documents are counted from the"
+  echo "  transcripts; the previews on the browse page are the raw part."
+fi
+echo "  scanned  $files served file(s)"
+if [[ $total -gt 0 ]]; then
+  echo "  matched  $total:  ${hits[*]}"
+else
+  echo "  matched  0 of the ${#scan_pattern[@]} shapes it knows"
+fi
+echo "  This is a FLOOR, not a clearance: it finds only the shapes it was taught,"
+echo "  so 0 means this scanner found nothing, never that there is nothing."
+
 echo
 echo "This is what the room will see. The prompt previews on the browse page are"
 echo "the user's own words; the cwd paths and branch names are real. Look before"

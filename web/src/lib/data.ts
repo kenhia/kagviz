@@ -1,5 +1,5 @@
 /**
- * Where the app reads its three documents from, and how.
+ * Where the app reads its four documents from, and how.
  *
  * The bundle is deployed to `derived/app/` and served by copyparty at
  * `/kagviz/app/index.html`; the data sits one level up, at `/kagviz/`. So the
@@ -17,6 +17,7 @@ import { decodeSessions, type SessionsIndex } from './contract/sessions.js';
 import { decodeSyncStatus, type SyncStatus } from './contract/sessions.js';
 import { decodeFacts, type Facts } from './contract/facts.js';
 import { decodeEvents, type EventsDocument } from './contract/events.js';
+import { decodeCalls, type CallsDocument } from './contract/calls.js';
 import { ContractError, parse } from './contract/decode.js';
 
 /** Trailing slash always, so `new URL(path, root)` behaves. */
@@ -71,6 +72,21 @@ export function loadFacts(host: string, id: string): Promise<Facts> {
 
 export function loadEvents(host: string, id: string): Promise<EventsDocument> {
 	return load(`events/${encodeURIComponent(host)}/${encodeURIComponent(id)}.json`, decodeEvents);
+}
+
+/**
+ * The calls document — the payload tier, fetched **lazily and only on
+ * demand**.
+ *
+ * Never alongside the events, and never speculatively. It is ~4.5× the events
+ * at the median (190 KB against 42 KB), a consumer that only wants the
+ * timeline must not pay for it, and it is the one document a tree may
+ * legitimately not have: `sessions.json` links `calls` only where `derive`
+ * was asked to write it. Call this when a reader opens a call, not before —
+ * and only when the index gave you a path.
+ */
+export function loadCalls(host: string, id: string): Promise<CallsDocument> {
+	return load(`calls/${encodeURIComponent(host)}/${encodeURIComponent(id)}.json`, decodeCalls);
 }
 
 export interface Progress {

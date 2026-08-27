@@ -17,10 +17,20 @@
     it was made, so a call whose result crossed the boundary lands on one side
     and is drawn on the other. Sprint 012 measured that over the corpus and
     corrected the contract, which had asserted an equality that does not hold.
+
+  Since sprint 015 a tool row opens a second time, into the calls document:
+  what the call actually said. That is the first thing this app shows which
+  was never counted — it is raw session content — so it is fenced and
+  labelled as such, and the rules the rest of the panel follows hold inside
+  it. Absent is absent: an interrupted call says so rather than drawing an
+  empty box, an offloaded result says what it is a preview *of*, and a result
+  that was an image says that instead of showing nothing.
 -->
 <script lang="ts">
 	import type { Facts, ToolClass } from '$lib/contract/facts.js';
 	import type { EventsDocument, ToolEvent } from '$lib/contract/events.js';
+	import { byId, type CallsDocument } from '$lib/contract/calls.js';
+	import { callView, clip, type CallsState } from '$lib/calltext.js';
 	import { segment, type Row, type Selection } from '$lib/segment.js';
 	import { bytes, count, duration, signed, stamp } from '$lib/format.js';
 	import { phaseLabel } from '$lib/contract/derived.js';
@@ -30,12 +40,29 @@
 		facts,
 		events,
 		selection,
-		onclear
+		onclear,
+		calls,
+		callsState = 'unasked',
+		callsError,
+		onopencalls
 	}: {
 		facts: Facts;
 		events: EventsDocument;
 		selection: Selection;
 		onclear: () => void;
+		/** The payload tier, once the page has fetched it. */
+		calls?: CallsDocument;
+		/**
+		 * Where the fetch has got to.
+		 *
+		 * `absent` is a real answer and not a failure: `derive` writes call
+		 * text only when asked, so most trees carry none, and a reader who
+		 * clicks deserves to be told that rather than shown an empty box.
+		 */
+		callsState?: CallsState;
+		callsError?: string;
+		/** Ask the page to fetch it. Lazy on purpose: never with the events. */
+		onopencalls?: () => void;
 	} = $props();
 
 	const seg = $derived(segment(facts, events, selection));
@@ -102,6 +129,32 @@
 
 	function toggle(key: string) {
 		if (!open.delete(key)) open.add(key);
+	}
+
+	/** Rows whose call text is open, and those expanded past the head. */
+	const openText = new SvelteSet<string>();
+	const openFull = new SvelteSet<string>();
+
+	const called = $derived(calls ? byId(calls) : undefined);
+
+	function toggleText(key: string) {
+		if (!openText.delete(key)) {
+			openText.add(key);
+			// One fetch per session, asked for by the first row that wants it —
+			// and nothing at all for a reader who never opens a call.
+			if (callsState === 'unasked') onopencalls?.();
+		}
+	}
+
+	/**
+	 * What an expanded row shows, decided in `calltext.ts` rather than here.
+	 *
+	 * The rules it applies are the ones the contract cares about — absent is
+	 * not empty, a non-text result is not an empty one, a preview is not the
+	 * output — and a rule that lives in markup is a rule nothing tests.
+	 */
+	function view(toolUseId: string) {
+		return callView(callsState, called?.get(toolUseId), toolUseId, callsError);
 	}
 
 	function key(r: Row, i: number): string {
@@ -254,6 +307,11 @@
 					{/if}
 				</button>
 			{/if}
+			{#if t.id !== undefined}
+				<button class="more" onclick={() => toggleText(id)} aria-expanded={openText.has(id)}>
+					{openText.has(id) ? 'hide' : 'read'} the call
+				</button>
+			{/if}
 		</span>
 		{#if t.files.length > 0 && open.has(id)}
 			<ul class="files">
@@ -262,7 +320,98 @@
 				{/each}
 			</ul>
 		{/if}
+		{#if openText.has(id) && t.id !== undefined}
+			{@render callText(t.id, id)}
+		{/if}
 	</li>
+{/snippet}
+
+<!--
+  What the call said.
+
+  Everything else this app shows was counted; this was not. It is the
+  transcript's own text — command output, file contents, whatever was pasted
+  in — so it is fenced, labelled, and rendered as **text**: monospace,
+  wrapped, no markdown, no HTML, no highlighting. A tool result is arbitrary
+  bytes and deciding what it "is" is a decision that goes wrong on a shared
+  screen.
+-->
+{#snippet callText(toolUseId: string, id: string)}
+	{@const v = view(toolUseId)}
+	<div class="calltext">
+		{#if v.kind === 'absent'}
+			<!-- Not a failure: the default state of every derived tree. The reader
+			     is told which knob changes it rather than left wondering what
+			     broke. -->
+			<p class="dim">
+				This tree carries no call text. It is the one document kagviz does not derive by default,
+				because it is the transcript's own words rather than something counted from them —
+				<code>kagviz derive --calls</code> writes it.
+			</p>
+		{:else if v.kind === 'error'}
+			<p class="warn">Could not read this session's call text: {v.message}</p>
+		{:else if v.kind === 'loading'}
+			<p class="dim">Reading the call text…</p>
+		{:else if v.kind === 'unjoined'}
+			<p class="warn">
+				No entry for <code>{v.id}</code> in this session's calls document — the two documents have drifted.
+			</p>
+		{:else}
+			<p class="raw">Raw session content, shown as written. Nothing counted or checked it.</p>
+
+			<h4>sent</h4>
+			{#if v.input === undefined}
+				<p class="dim">No input recorded on this call.</p>
+			{:else}
+				{@const c = clip(v.input, openFull.has(`${id}:in`))}
+				<pre>{c.shown}</pre>
+				{#if c.hidden}
+					<!-- No byte figure here, deliberately. The row above already
+					     shows `input_bytes`, which the contract defines as the
+					     *canonical* compact serialization — and what is on screen
+					     is the formatted one, which is larger. Two numbers for one
+					     input, differing, is the disagreement this panel warns
+					     about everywhere else; the result's button below can carry
+					     its size because there the two are the same text. -->
+					<button class="more" onclick={() => openFull.add(`${id}:in`)}> show the rest </button>
+				{/if}
+			{/if}
+
+			<h4>came back</h4>
+			{#if v.persisted}
+				<p class="note">
+					This is the preview the model was handed, not the output. The harness judged the real
+					output too large for the context{v.persisted.bytes !== undefined
+						? ` — ${bytes(v.persisted.bytes)} of it`
+						: ''} and saved it beside the transcript; that file is not served.
+				</p>
+			{/if}
+			{#if v.result.kind === 'interrupted'}
+				<!-- Absent is not empty, and this is the line that keeps it so. -->
+				<p class="dim">
+					No result — the call was interrupted, or was still running when the transcript ended.
+				</p>
+			{:else if v.result.kind === 'empty'}
+				<p class="dim">A result came back carrying no text.</p>
+			{:else}
+				{@const c = clip(v.result.text, openFull.has(`${id}:out`))}
+				<pre>{c.shown}</pre>
+				{#if c.hidden}
+					<button class="more" onclick={() => openFull.add(`${id}:out`)}>
+						show all {bytes(c.bytes)}
+					</button>
+				{/if}
+			{/if}
+			{#if v.blocks.length > 0}
+				<!-- Why an empty result here is not an empty result: 4,672 of the
+				     45,394 calls in the 015 corpus sweep came back with one. -->
+				<p class="note">
+					The result also carried {v.blocks.length}
+					{v.blocks.join(', ')} block(s), which carry no text and are not in this document.
+				</p>
+			{/if}
+		{/if}
+	</div>
 {/snippet}
 
 <style>
@@ -465,6 +614,51 @@
 	}
 	.del {
 		color: var(--del);
+	}
+	.calltext {
+		grid-column: 2;
+		margin: 6px 0 2px;
+		padding: 8px 10px;
+		border-left: 2px solid var(--rule, #d0d0d0);
+		background: var(--sunken, rgba(127, 127, 127, 0.06));
+	}
+	.calltext h4 {
+		margin: 8px 0 3px;
+		font-size: 0.72rem;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		opacity: 0.65;
+	}
+	.calltext h4:first-of-type {
+		margin-top: 2px;
+	}
+	.calltext p {
+		margin: 3px 0;
+		font-size: 0.78rem;
+	}
+	.calltext p.raw {
+		margin: 0 0 6px;
+		font-size: 0.72rem;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		opacity: 0.7;
+	}
+	.calltext p.note {
+		font-style: italic;
+		opacity: 0.8;
+	}
+	.calltext pre {
+		margin: 0;
+		padding: 6px 8px;
+		max-height: 22em;
+		overflow: auto;
+		font-size: 0.76rem;
+		line-height: 1.45;
+		/* A tool result is arbitrary bytes: wrap it, never let it push the
+		   page sideways, and never let a long token escape the box. */
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+		background: var(--code-bg, rgba(127, 127, 127, 0.1));
 	}
 	ul.files {
 		grid-column: 2;

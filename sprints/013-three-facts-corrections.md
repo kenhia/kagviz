@@ -198,19 +198,71 @@ dedups through the same accumulator. Its four `Bash` calls already split
 
 ## Deployed
 
-Pending — `deploy-kagviz`, which sprint-ship runs in Phase 7 from merged `main`
-(there is no `just deploy` recipe; the skill drives `just web-deploy` and then
-`just collect-derive`, and the latter depends on `build-release`, which is what
-actually replaces the binary the 04:00 timer runs).
+**2026-08-27**, by `deploy-kagviz` in sprint-ship Phase 7, from merged `main`.
 
-**One thing that inverts for this sprint.** The skill's step 6 proof is that *a
-sprint which did not change the extractor must move zero derived bytes* — sweep
-`sha256sum` over `facts/`, `events/` and `reports/` before and after, and diff.
-013 is the opposite case: it should move **nearly every one of those 1,221
-documents**, and a small diff would be the alarming outcome. Until that runs,
-the browse page and the app are serving pre-013 numbers — `assistant_turns` and
-every token figure roughly 2× and 2.5× what they should be.
+| | |
+|---|---|
+| artifact | `target/release/kagviz` in this checkout, stamped `0.1.0 (49a3907)` |
+| served tree | `/ai-data/kagviz-data/live/derived/`, 413 sessions, all re-derived in 1.3s |
+| app bundle | rebuilt and installed at `derived/app/` — `web/` changed this sprint, so step 3 was not skippable |
+| rollback target | `76499a5` (the commit `main` carried before this merge) |
 
-Expect roughly 391 of 405 pinned-corpus sessions' worth of churn, scaled to the
-live tree's 413. The pinned-corpus before/after in **What shipped** above is the
-prediction to check the deploy against.
+`META.json` reads `0.1.0 (49a3907)` and `HEAD` is `49a3907`.
+
+### The bytes
+
+**1,209 of 1,239 derived documents moved**; 30 unchanged, none added or removed.
+For once that is the *expected* result rather than the alarming one — the
+deploy skill's step 6 asserts a sprint which did not touch the extractor moves
+zero bytes, and this sprint inverts it.
+
+The 30 that held still are 10 sessions × 3 documents, and they are all tiny —
+2 to 15 records, 0 to 3 turns, no shell calls, at most one prompt. None of the
+three corrections had anything to bite on.
+
+### The values, against predictions made before any code existed
+
+| | #1653 / #1647 predicted, from the live mirror | deployed tree |
+|---|---|---|
+| `assistant_turns` | 39,343 | **39,343** |
+| `tokens.output` | 33,570,698 | **33,570,698** |
+| `user_prompts` | 1,843 − 117 = 1,726 | **1,726** |
+
+Both #1653 figures land to the digit on numbers its work item computed with its
+own script, over the same mirror, before the extractor was touched. That is a
+stronger check than the corpus aggregate, because nothing about the shipped code
+was fitted to it.
+
+Live totals now: `opaque_edits` **15,816** of **22,399** shell calls, 3,522
+files touched, 280,334 lines added.
+
+### Served, and smoke-tested
+
+`index.html` and `app/index.html` both 200 over copyparty, and the browse page
+carries its `href="app/index.html"` link — the step-3 ordering trap, checked
+rather than assumed.
+
+Two sessions read against the deployed instance:
+
+- `a811ca00` (hv-simulator), the one #1653 named as worst: **2,908 turns /
+  2,704,095 out**, down from 5,560 / 6,628,363. Its `Bash` row now reads
+  `1004× · 773 unreadable` — 231 calls judged read-only, visible as the
+  difference, which is what `calls` staying the total is for.
+- `0fd10574`, which exercises the branch that could not exist before: three
+  shell calls, all read-only, so the report says `Bash 3× nothing written` and
+  the terminal `[0 opaque call(s) unaccounted]`. That session's `+19/−4` used
+  to be presented as a floor with three unknowns behind it. It is now known to
+  be exact.
+
+Checked and **not** found: the per-tool defect this sprint created and fixed —
+zero occurrences of `0 file(s) +0/−0` on any per-tool line across all 413
+reports. (The Files *card headline* does render that on sessions which recovered
+nothing, which is correct and long-standing: the "an unknown, not a zero" note
+sits directly beneath it.)
+
+### What this does not assert
+
+That the next 04:00 run succeeds — that depends on hosts being reachable, which
+is a nightly variable, not a deploy property. `just collect-status` is the check
+for that, the morning after. The deploy deliberately did not sync, so the
+mirrors are as of the last nightly.

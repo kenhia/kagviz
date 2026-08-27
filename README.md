@@ -242,6 +242,24 @@ The static report is unchanged and stays. `web/README.md` has the decisions —
 why the router is hash-based, why the bundle lives under `derived/`, and the
 two traps that only showed up on deploy.
 
+### Showing it off the tailnet
+
+copyparty is loopback-only behind `tailscale serve`, so a machine that is not
+on the tailnet has no path to kagviz at all. `just demo` builds a curated tree
+out of the live mirror and serves it on this host's LAN address, which a work
+laptop or a screen-share can reach:
+
+```sh
+just demo                     # kagviz's own sessions, built and served
+just demo '*korg*'            # quote the globs — your shell would eat them
+just demo --build-only        # build it, look at it, serve it later
+just demo-clean
+```
+
+It selects and serves; it does not check what it is about to show. Pick the
+corpus and look at it first — the browse page carries prompt previews, cwd
+paths and branch names. `docs/collection.md` has the rest.
+
 ## Where it fits
 
 - **harness-eval** scrapes session metrics ad hoc for its run logs; kagviz aims

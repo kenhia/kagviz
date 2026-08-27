@@ -184,6 +184,74 @@ deploying rather than by reasoning:
   build time (`web/scripts/relativize.js`), so the bundle works wherever the
   directory is copied and the mount path is not baked into it.
 
+## Showing it to people — `just demo` (sprint 014)
+
+That mount is **tailnet-only, and there is no LAN path at all**. copyparty
+binds `127.0.0.1:8027`; the `:8027` listeners on kai's tailnet IP belong to
+`tailscaled` (`tailscale serve` terminating TLS and proxying to loopback). So
+a machine that is not on the tailnet cannot reach kagviz by any URL — and
+`kwork` is Microsoft-managed and deliberately off the tailnet (homelab
+TLS/auth decision, 2026-07-11) while reaching the LAN fine. Showing kagviz
+over Teams needs a second, temporary server.
+
+```sh
+just demo                     # kagviz's own sessions, built and served
+just demo '*korg*' '*kmon*'   # quote the globs — your shell would eat them
+just demo --build-only        # build the tree, do not serve (pre-check)
+just demo --serve-only        # serve what is already built, no rebuild
+just demo --port 9000         # default 8028
+just demo-clean               # remove the tree
+```
+
+`collect/demo.sh` copies the matching project directories out of the live
+mirror into `~/.cache/kagviz-demo/<host>/projects/`, derives, installs the app
+and serves `derived/` on this host's LAN address with `python3 -m
+http.server`. A curated corpus is nearly free because `derive` runs over any
+directory holding `<host>/projects/`.
+
+Five things it does that the three obvious commands do not:
+
+- **Resolves the LAN address from the default route** rather than hardcoding
+  an interface. The address is not a constant and a wrong one fails silently
+  as "connection refused" mid-meeting. Tailscale's routes are per-host `/32`s
+  and never the default, so this cannot pick the tailnet IP by accident;
+  `KAGVIZ_DEMO_ADDR` overrides, and an address inside `100.64.0.0/10` is
+  called out as suspicious.
+- **Re-runs `kagviz index` after `web-deploy`.** `derive` writes `index.html`
+  before `derived/app/` exists, so the "Open the app" link the page normally
+  carries is absent from the page `derive` just wrote — the link is only
+  emitted when the app is actually there. Without the second `index` pass the
+  demo's browse page has no way into the app, which is the half a demo is for.
+- **Prints the full URL with `index.html` on it.** `python3 -m http.server`
+  does serve a directory index, unlike copyparty, so the bare URL works too —
+  but the two hosts should not have to be remembered differently.
+- **Says once that this is plaintext HTTP on the LAN**, no TLS and no
+  accounts. Consistent with the accepted kwork↔korg posture, but a stated
+  choice rather than an unnoticed one.
+- **Rebuilds the tree from scratch every time**, so last week's corpus cannot
+  turn up on a projector.
+
+**It selects; it does not audit.** Ken's call at the start of 014: the person
+running the demo picks what to show and pre-checks it, so the recipe's job is
+the transport and the selection knob. It prints what is in the tree — the
+projects copied, the session count per host, the served size — and says in as
+many words that the prompt previews are the user's own words and nothing here
+checked them. There is no secret scan and nothing downstream should treat this
+as a safety gate.
+
+**`sync-status.json` is deliberately not copied.** It reports the collector's
+last run over the whole fleet, which says nothing true about a hand-picked
+tree. Both consumers already render the absence honestly and by design — the
+static page prints "no sync status recorded — the collector has not run, or
+these mirrors were not written by it", which is exactly the case, and the
+app's `loadSyncStatus` catches the 404 into `undefined` and `SyncLine` says
+"no sync status". The one visible cost is a 404 for `sync-status.json` in the
+browser console, which is the designed-for path and not a defect.
+
+Nothing here changes the facts, the contract or the app. It is packaging, and
+it uses the property `web/README.md` records — the app works under any HTTP
+mount at any depth — without spending it.
+
 ## Scheduling
 
 A systemd **user** timer on kai, `OnCalendar=*-*-* 04:00:00`. kai's zone is

@@ -153,3 +153,34 @@ extractor, the facts, the contract and the app are untouched.
   numbers behind it (~51 plausibly-live credentials across 59 of 413 sessions,
   90,182 payloads) are about *call text*, which is 015's surface, not the
   browse page's.
+
+## Deployed
+
+**2026-08-26**, kai, from merged `main` at `d8d99b2` (PR #15, squash-merged
+after CI passed on the branch and again on the merge commit).
+
+| what | where | result |
+|---|---|---|
+| extractor | `target/release/kagviz` in this checkout | rebuilt at `d8d99b2` — the binary the 04:00 timer runs |
+| app bundle | `/ai-data/kagviz-data/live/derived/app/` | deployed **before** the derive, so the browse page carries its link |
+| served tree | `…/derived/` | re-derived, 413 sessions across cleo/kai/kubs0 in 1.3s |
+
+- **Stamp**: `META.json` reads `0.1.0 (d8d99b2)`, matching `HEAD`.
+- **Bytes**: `sha256sum` over `facts/`, `events/` and `reports/` before and
+  after — **1,239 documents, zero moved**. That is the proof this sprint
+  wanted: it is packaging, it did not touch the extractor, and nothing about
+  the facts changed. The stamp moved; no value did.
+- **Served**: `/kagviz/index.html` 200, `/kagviz/app/index.html` 200, and the
+  browse page carries one `href="app/index.html"` — the step-3 ordering trap,
+  caught rather than assumed.
+- **The sprint's own deliverable**, smoke-tested from the merged checkout
+  rather than the branch: `just demo --build-only` → 10 sessions / 2.0 MB
+  served; `just demo --serve-only` bound `192.168.1.109:8028`; driven headless
+  from that origin — static page 10 rows with the app link, bare directory URL
+  200, app 10 rows, a session page reached through the app's own link with its
+  events loaded, a static report 200. One console entry, the expected
+  `sync-status.json` 404. `just demo-clean` removed the tree and the port is
+  clear.
+
+Rollback target: `b838fcc` (the commit before this sprint). `derived/` is
+disposable — the mirrors were not touched, as always.

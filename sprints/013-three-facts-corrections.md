@@ -198,8 +198,19 @@ dedups through the same accumulator. Its four `Bash` calls already split
 
 ## Deployed
 
-Pending. **Worth knowing before it happens:** the live derived tree under
-`/ai-data/kagviz-data/live/derived` still holds facts from the old binary, so
-every number the browse page and the app are serving is the pre-013 one until
-`just deploy` re-derives them. That is the largest single re-derivation this
-project has done, and it is why the deploy is not optional bookkeeping here.
+Pending — `deploy-kagviz`, which sprint-ship runs in Phase 7 from merged `main`
+(there is no `just deploy` recipe; the skill drives `just web-deploy` and then
+`just collect-derive`, and the latter depends on `build-release`, which is what
+actually replaces the binary the 04:00 timer runs).
+
+**One thing that inverts for this sprint.** The skill's step 6 proof is that *a
+sprint which did not change the extractor must move zero derived bytes* — sweep
+`sha256sum` over `facts/`, `events/` and `reports/` before and after, and diff.
+013 is the opposite case: it should move **nearly every one of those 1,221
+documents**, and a small diff would be the alarming outcome. Until that runs,
+the browse page and the app are serving pre-013 numbers — `assistant_turns` and
+every token figure roughly 2× and 2.5× what they should be.
+
+Expect roughly 391 of 405 pinned-corpus sessions' worth of churn, scaled to the
+live tree's 413. The pinned-corpus before/after in **What shipped** above is the
+prediction to check the deploy against.

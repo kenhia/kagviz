@@ -100,3 +100,20 @@ collect-status:
 collect-run:
     systemctl --user start kagviz-collect.service
     journalctl --user -u kagviz-collect.service -n 40 --no-pager
+
+# --- showing it to people: `just demo` (sprints/014, docs/collection.md) ---
+
+# copyparty is loopback-only and the tailnet-IP :8027 listeners are tailscaled,
+# so there is no LAN path to kagviz. `demo` builds a curated tree out of the
+# live mirror and serves it on this host's LAN address — the path a machine
+# that is not on the tailnet (kwork, a Teams screen-share) can actually reach.
+# It selects and serves; it does not audit. Pick what you show and look first.
+
+# Build a curated tree and serve it on the LAN (default corpus: kagviz's own)
+demo *args: build-release
+    collect/demo.sh {{args}}
+
+# Remove the demo tree
+demo-clean:
+    rm -rf "${KAGVIZ_DEMO_TREE:-$HOME/.cache/kagviz-demo}"
+    @echo "demo tree removed"
